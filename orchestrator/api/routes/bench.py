@@ -15,7 +15,16 @@ import asyncio
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    Header,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from pydantic import BaseModel
 
 from ..auth import require_api_key
@@ -166,16 +175,24 @@ async def enqueue_bench(
     return item
 
 
-@router.get("/bench/queue", response_model=list[dict[str, Any]], dependencies=[Depends(require_api_key)])
+@router.get(
+    "/bench/queue",
+    response_model=list[dict[str, Any]],
+    dependencies=[Depends(require_api_key)],
+)
 async def list_queue(request: Request) -> list[dict[str, Any]]:
     return await request.app.state.db.list_queue()
 
 
-@router.delete("/bench/queue/{item_id}", status_code=204, dependencies=[Depends(require_api_key)])
+@router.delete(
+    "/bench/queue/{item_id}", status_code=204, dependencies=[Depends(require_api_key)]
+)
 async def delete_queue_item(item_id: str, request: Request) -> None:
     deleted = await request.app.state.db.delete_queue_item(item_id)
     if not deleted:
-        raise HTTPException(status_code=404, detail=f"Item not found or not pending: {item_id}")
+        raise HTTPException(
+            status_code=404, detail=f"Item not found or not pending: {item_id}"
+        )
 
 
 @router.post("/bench/queue/{item_id}/run", dependencies=[Depends(require_api_key)])
@@ -185,7 +202,9 @@ async def trigger_queue_item(item_id: str, request: Request) -> dict[str, str]:
     if not item:
         raise HTTPException(status_code=404, detail=f"Queue item not found: {item_id}")
     if item["status"] != "pending":
-        raise HTTPException(status_code=409, detail=f"Item is not pending (status={item['status']})")
+        raise HTTPException(
+            status_code=409, detail=f"Item is not pending (status={item['status']})"
+        )
 
     scheduler = getattr(request.app.state, "bench_scheduler", None)
     if scheduler is None:

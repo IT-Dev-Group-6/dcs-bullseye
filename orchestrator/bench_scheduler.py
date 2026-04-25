@@ -68,7 +68,10 @@ class BenchScheduler:
 
     async def run_item(self, item_id: str) -> None:
         if self._running:
-            logger.warning("[bench/sched] run_item called while already running — skipping %s", item_id)
+            logger.warning(
+                "[bench/sched] run_item called while already running — skipping %s",
+                item_id,
+            )
             return
 
         self._running = True
@@ -80,18 +83,24 @@ class BenchScheduler:
             self._running = False
             return
 
-        logger.info("[bench/sched] starting run for %s (%s)", item["miz_filename"], item_id)
+        logger.info(
+            "[bench/sched] starting run for %s (%s)", item["miz_filename"], item_id
+        )
         now = datetime.now(timezone.utc).isoformat()
         await db.update_queue_status(item_id, "running", started_at=now)
 
         try:
             run_id = await self._execute(item)
             completed = datetime.now(timezone.utc).isoformat()
-            await db.update_queue_status(item_id, "done", completed_at=completed, run_id=run_id)
+            await db.update_queue_status(
+                item_id, "done", completed_at=completed, run_id=run_id
+            )
             logger.info("[bench/sched] %s complete — run_id=%s", item_id, run_id)
         except Exception as exc:
             completed = datetime.now(timezone.utc).isoformat()
-            await db.update_queue_status(item_id, "failed", completed_at=completed, error=str(exc))
+            await db.update_queue_status(
+                item_id, "failed", completed_at=completed, error=str(exc)
+            )
             logger.error("[bench/sched] %s failed: %s", item_id, exc)
         finally:
             self._running = False
@@ -127,14 +136,22 @@ class BenchScheduler:
                 monitor_started = True
                 logger.info("[bench/sched] CPU monitor started for %s", service_name)
             except AgentError as exc:
-                logger.warning("[bench/sched] monitor start skipped (%s) — no CPU data", exc)
+                logger.warning(
+                    "[bench/sched] monitor start skipped (%s) — no CPU data", exc
+                )
 
             # 3. Load mission (stops DCS, loads, starts)
             logger.info("[bench/sched] loading mission on %s", service_name)
-            await client.trigger_action(service_name, "mission_load", {"mission": miz_filename})
+            await client.trigger_action(
+                service_name, "mission_load", {"mission": miz_filename}
+            )
 
             # 4. Wait for DCS to settle, then run for duration
-            logger.info("[bench/sched] waiting %ds settle + %ds bench", int(_SETTLE_DELAY), duration_s)
+            logger.info(
+                "[bench/sched] waiting %ds settle + %ds bench",
+                int(_SETTLE_DELAY),
+                duration_s,
+            )
             await asyncio.sleep(_SETTLE_DELAY)
             await asyncio.sleep(duration_s)
 
@@ -149,11 +166,15 @@ class BenchScheduler:
                     await client.bench_monitor_stop()
                     logger.info("[bench/sched] CPU monitor stopped")
                 except AgentError as exc:
-                    logger.warning("[bench/sched] monitor stop failed (non-fatal): %s", exc)
+                    logger.warning(
+                        "[bench/sched] monitor stop failed (non-fatal): %s", exc
+                    )
 
             # 7. Collect bench data via afterburner
             logger.info("[bench/sched] collecting bench data")
-            result = await client.bench_collect(miz_filename, service_name, timeout=120.0)
+            result = await client.bench_collect(
+                miz_filename, service_name, timeout=120.0
+            )
             run_id: str = result.get("run_id", "")
 
             # 8. Clean up the .miz

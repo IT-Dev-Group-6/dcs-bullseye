@@ -282,7 +282,9 @@ class AgentClient:
 
     async def bench_monitor_start(self, service_name: str) -> dict[str, Any]:
         """POST /agent/v1/bench/monitor/start — start bench_monitor.py for an instance."""
-        return await self._post("/bench/monitor/start", body={"service_name": service_name})
+        return await self._post(
+            "/bench/monitor/start", body={"service_name": service_name}
+        )
 
     async def bench_monitor_stop(self) -> dict[str, Any]:
         """POST /agent/v1/bench/monitor/stop — stop the running bench monitor."""

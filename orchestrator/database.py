@@ -574,7 +574,10 @@ class Database:
         assert self._conn
         await self._conn.executemany(
             "INSERT INTO bench_timeseries (run_id, elapsed_s, drift_s, groups, units) VALUES (?,?,?,?,?)",
-            [(run_id, r["elapsed_s"], r["drift_s"], r["groups"], r["units"]) for r in rows],
+            [
+                (run_id, r["elapsed_s"], r["drift_s"], r["groups"], r["units"])
+                for r in rows
+            ],
         )
         await self._conn.commit()
 
@@ -586,7 +589,10 @@ class Database:
         assert self._conn
         await self._conn.executemany(
             "INSERT INTO bench_cpu (run_id, elapsed_s, cpu_pct, mem_mb, threads) VALUES (?,?,?,?,?)",
-            [(run_id, r["elapsed_s"], r["cpu_pct"], r["mem_mb"], r["threads"]) for r in rows],
+            [
+                (run_id, r["elapsed_s"], r["cpu_pct"], r["mem_mb"], r["threads"])
+                for r in rows
+            ],
         )
         await self._conn.commit()
 
@@ -602,7 +608,9 @@ class Database:
         )
         await self._conn.commit()
 
-    async def list_bench_runs(self, host_id: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    async def list_bench_runs(
+        self, host_id: str | None = None, limit: int = 100
+    ) -> list[dict[str, Any]]:
         assert self._conn
         if host_id:
             sql = "SELECT * FROM bench_runs WHERE host_id = ? ORDER BY created_at DESC LIMIT ?"

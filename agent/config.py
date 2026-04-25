@@ -31,6 +31,7 @@ class InstanceConfig:
     auto_start: bool = True
     ports: dict = field(default_factory=dict)  # game/webgui/srs/tacview
     manager: str = "nssm"  # "nssm" or "task" (Windows Task Scheduler)
+    bench_csv_path: str = ""  # path to gm_bench.lua CSV output; empty = skip CPU data
 
 
 @dataclass
@@ -45,6 +46,7 @@ class AgentConfig:
     max_upload_bytes: int = 100 * 1024 * 1024  # max .miz upload size (default 100 MB)
     orchestrator_url: str = ""  # e.g. https://my-vps:8888 --� set by installer
     host_id: str = ""  # assigned by orchestrator at registration
+    afterburner_bin: str = "afterburner"  # path or name of the afterburner CLI
 
 
 def _parse_instances(raw: list[dict[str, Any]]) -> list[InstanceConfig]:
@@ -74,6 +76,7 @@ def _parse_instances(raw: list[dict[str, Any]]) -> list[InstanceConfig]:
                 auto_start=bool(item.get("auto_start", True)),
                 ports=dict(item.get("ports", {})),
                 manager=str(item.get("manager", "nssm")),
+                bench_csv_path=str(item.get("bench_csv_path", "")),
             )
         )
     return parsed
@@ -111,4 +114,5 @@ def load_config(path: Path | str = DEFAULT_CONFIG_PATH) -> AgentConfig:
         max_upload_bytes=int(data.get("max_upload_bytes", 100 * 1024 * 1024)),
         orchestrator_url=str(data.get("orchestrator_url", "")),
         host_id=str(data.get("host_id", "")),
+        afterburner_bin=str(data.get("afterburner_bin", "afterburner")),
     )

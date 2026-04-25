@@ -31,8 +31,12 @@ class InstanceConfig:
     auto_start: bool = True
     ports: dict = field(default_factory=dict)  # game/webgui/srs/tacview
     manager: str = "nssm"  # "nssm" or "task" (Windows Task Scheduler)
-    bench_csv_path: str = ""  # output path for bench_monitor.py CSV; empty = skip CPU data
-    bench_monitor_script: str = ""  # path to bench_monitor.py; empty = no CPU monitoring
+    bench_csv_path: str = (
+        ""  # output path for bench_monitor.py CSV; empty = skip CPU data
+    )
+    bench_monitor_script: str = (
+        ""  # path to bench_monitor.py; empty = no CPU monitoring
+    )
 
 
 @dataclass

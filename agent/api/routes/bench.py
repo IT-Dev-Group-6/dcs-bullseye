@@ -33,8 +33,8 @@ class MonitorRequest(BaseModel):
 
 
 class CollectRequest(BaseModel):
-    mission: str      # bare filename, e.g. "mymission.miz"
-    service_name: str # instance service_name, e.g. "DCS-TexasBBQ"
+    mission: str  # bare filename, e.g. "mymission.miz"
+    service_name: str  # instance service_name, e.g. "DCS-TexasBBQ"
 
 
 def _find_instance(config, service_name: str) -> InstanceConfig | None:
@@ -67,11 +67,18 @@ async def start_monitor(payload: MonitorRequest, request: Request) -> dict[str, 
 
     inst = _find_instance(config, payload.service_name)
     if inst is None:
-        raise HTTPException(status_code=404, detail=f"Instance not found: {payload.service_name}")
+        raise HTTPException(
+            status_code=404, detail=f"Instance not found: {payload.service_name}"
+        )
     if not inst.bench_monitor_script:
-        raise HTTPException(status_code=422, detail="bench_monitor_script not configured for this instance")
+        raise HTTPException(
+            status_code=422,
+            detail="bench_monitor_script not configured for this instance",
+        )
     if not inst.bench_csv_path:
-        raise HTTPException(status_code=422, detail="bench_csv_path not configured for this instance")
+        raise HTTPException(
+            status_code=422, detail="bench_csv_path not configured for this instance"
+        )
 
     monitor_state = request.app.state.bench_monitor
     if monitor_state.get("proc") is not None:
@@ -80,8 +87,10 @@ async def start_monitor(payload: MonitorRequest, request: Request) -> dict[str, 
     cmd = [
         sys.executable,
         inst.bench_monitor_script,
-        "--server", inst.saved_games_key,
-        "--out", inst.bench_csv_path,
+        "--server",
+        inst.saved_games_key,
+        "--out",
+        inst.bench_csv_path,
     ]
     logger.info("[bench/monitor] starting: %s", " ".join(cmd))
     proc = await asyncio.create_subprocess_exec(
@@ -122,7 +131,9 @@ async def collect_bench(payload: CollectRequest, request: Request) -> dict[str, 
 
     inst = _find_instance(config, payload.service_name)
     if inst is None:
-        raise HTTPException(status_code=404, detail=f"Instance not found: {payload.service_name}")
+        raise HTTPException(
+            status_code=404, detail=f"Instance not found: {payload.service_name}"
+        )
 
     if not config.orchestrator_url:
         raise HTTPException(status_code=503, detail="orchestrator_url not configured")
@@ -131,7 +142,9 @@ async def collect_bench(payload: CollectRequest, request: Request) -> dict[str, 
 
     active_dir = config.active_missions_dir
     if not active_dir:
-        raise HTTPException(status_code=503, detail="active_missions_dir not configured")
+        raise HTTPException(
+            status_code=503, detail="active_missions_dir not configured"
+        )
 
     miz_path = str(Path(active_dir) / payload.mission)
     afterburner = config.afterburner_bin
@@ -150,9 +163,14 @@ async def collect_bench(payload: CollectRequest, request: Request) -> dict[str, 
 
     # Build push command
     push_cmd = [
-        afterburner, "bench", "push", config.orchestrator_url,
-        "--host-id", config.host_id,
-        "--key", config.api_key,
+        afterburner,
+        "bench",
+        "push",
+        config.orchestrator_url,
+        "--host-id",
+        config.host_id,
+        "--key",
+        config.api_key,
     ]
 
     logger.info("[bench/collect] pushing to %s", config.orchestrator_url)

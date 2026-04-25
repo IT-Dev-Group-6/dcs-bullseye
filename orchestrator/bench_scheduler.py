@@ -120,26 +120,43 @@ class BenchScheduler:
             logger.info("[bench/sched] uploading %s to agent", miz_filename)
             await client.upload_active_mission(miz_filename, miz_data, timeout=120.0)
 
-            # 2. Load mission (stops DCS, loads, starts)
+            # 2. Start CPU monitor (non-fatal if not configured)
+            monitor_started = False
+            try:
+                await client.bench_monitor_start(service_name)
+                monitor_started = True
+                logger.info("[bench/sched] CPU monitor started for %s", service_name)
+            except AgentError as exc:
+                logger.warning("[bench/sched] monitor start skipped (%s) — no CPU data", exc)
+
+            # 3. Load mission (stops DCS, loads, starts)
             logger.info("[bench/sched] loading mission on %s", service_name)
             await client.trigger_action(service_name, "mission_load", {"mission": miz_filename})
 
-            # 3. Wait for DCS to settle, then run for duration
+            # 4. Wait for DCS to settle, then run for duration
             logger.info("[bench/sched] waiting %ds settle + %ds bench", int(_SETTLE_DELAY), duration_s)
             await asyncio.sleep(_SETTLE_DELAY)
             await asyncio.sleep(duration_s)
 
-            # 4. Stop DCS
+            # 5. Stop DCS
             logger.info("[bench/sched] stopping %s", service_name)
             await client.trigger_action(service_name, "stop")
-            await asyncio.sleep(10)  # brief pause before collect
+            await asyncio.sleep(10)  # brief pause so log flush completes
 
-            # 5. Collect bench data via afterburner
+            # 6. Stop CPU monitor
+            if monitor_started:
+                try:
+                    await client.bench_monitor_stop()
+                    logger.info("[bench/sched] CPU monitor stopped")
+                except AgentError as exc:
+                    logger.warning("[bench/sched] monitor stop failed (non-fatal): %s", exc)
+
+            # 7. Collect bench data via afterburner
             logger.info("[bench/sched] collecting bench data")
             result = await client.bench_collect(miz_filename, service_name, timeout=120.0)
             run_id: str = result.get("run_id", "")
 
-            # 6. Clean up the .miz
+            # 8. Clean up the .miz
             logger.info("[bench/sched] deleting %s from agent", miz_filename)
             try:
                 await client.delete_active_mission(miz_filename)

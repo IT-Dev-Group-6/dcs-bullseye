@@ -279,3 +279,13 @@ class AgentClient:
     async def delete_instance_schedule(self, service_name: str) -> None:
         """DELETE /agent/v1/instances/{serviceId}/schedule."""
         await self._delete(f"/instances/{service_name}/schedule")
+
+    async def bench_collect(
+        self, mission: str, service_name: str, timeout: float = 120.0
+    ) -> dict[str, Any]:
+        """POST /agent/v1/bench/collect — run afterburner record+push and return run_id."""
+        return await self._post(
+            "/bench/collect",
+            body={"mission": mission, "service_name": service_name},
+            timeout=timeout,
+        )

@@ -14,6 +14,7 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -31,6 +32,7 @@ from .routes import actions as actions_routes
 from .routes import jobs as jobs_routes
 from .routes import events as events_routes
 from .routes import analytics as analytics_routes
+from .routes import bench as bench_routes
 from .routes import registration as registration_routes
 
 logger = logging.getLogger(__name__)
@@ -127,6 +129,13 @@ def create_app(config: OrchestratorConfig) -> FastAPI:
         lifespan=lifespan,
     )
 
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["GET", "POST"],
+        allow_headers=["*"],
+    )
+
     # Attach shared state
     app.state.config = config
     app.state.db = db
@@ -150,6 +159,9 @@ def create_app(config: OrchestratorConfig) -> FastAPI:
 
     # Analytics POST -- agent-key auth only (no master key); GET covered by _AUTH_DEP via separate include
     app.include_router(analytics_routes.router, prefix="/api/v1")
+
+    # Bench -- POST is agent-key gated; GET is public (no auth, CORS open for GitHub Pages)
+    app.include_router(bench_routes.router, prefix="/api/v1")
 
     # Installer static files — served unauthenticated from /install/
     # Contains agent.zip, install.ps1 (no secrets — secrets come from registration)

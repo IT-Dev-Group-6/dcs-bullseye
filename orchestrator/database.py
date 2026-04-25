@@ -83,6 +83,51 @@ CREATE TABLE IF NOT EXISTS analytics_events (
 # Migration: add frp_port to hosts if not present (safe on older DBs)
 _MIGRATE_HOSTS_FRP = "ALTER TABLE hosts ADD COLUMN frp_port INTEGER"
 
+_CREATE_BENCH_RUNS = """
+CREATE TABLE IF NOT EXISTS bench_runs (
+    id          TEXT PRIMARY KEY,
+    host_id     TEXT NOT NULL,
+    mission     TEXT NOT NULL,
+    started_at  TEXT NOT NULL,
+    ended_at    TEXT,
+    duration_s  INTEGER,
+    notes       TEXT,
+    created_at  TEXT NOT NULL
+);
+"""
+
+_CREATE_BENCH_TIMESERIES = """
+CREATE TABLE IF NOT EXISTS bench_timeseries (
+    run_id    TEXT NOT NULL REFERENCES bench_runs(id),
+    elapsed_s REAL NOT NULL,
+    drift_s   REAL NOT NULL,
+    groups    INTEGER NOT NULL,
+    units     INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bench_ts_run ON bench_timeseries(run_id);
+"""
+
+_CREATE_BENCH_CPU = """
+CREATE TABLE IF NOT EXISTS bench_cpu (
+    run_id    TEXT NOT NULL REFERENCES bench_runs(id),
+    elapsed_s REAL NOT NULL,
+    cpu_pct   REAL NOT NULL,
+    mem_mb    REAL NOT NULL,
+    threads   INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bench_cpu_run ON bench_cpu(run_id);
+"""
+
+_CREATE_BENCH_FINDINGS = """
+CREATE TABLE IF NOT EXISTS bench_findings (
+    run_id   TEXT NOT NULL REFERENCES bench_runs(id),
+    rule_id  TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    detail   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_bench_findings_run ON bench_findings(run_id);
+"""
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -116,6 +161,10 @@ class Database:
         await self._conn.execute(_CREATE_INVITE_CODES)
         await self._conn.execute(_CREATE_AUDIT_LOGS)
         await self._conn.execute(_CREATE_ANALYTICS_EVENTS)
+        await self._conn.execute(_CREATE_BENCH_RUNS)
+        await self._conn.executescript(_CREATE_BENCH_TIMESERIES)
+        await self._conn.executescript(_CREATE_BENCH_CPU)
+        await self._conn.executescript(_CREATE_BENCH_FINDINGS)
         # Safe migration: add frp_port column if missing
         try:
             await self._conn.execute(_MIGRATE_HOSTS_FRP)
@@ -466,6 +515,103 @@ class Database:
         async with self._conn.execute(sql, params) as cur:
             rows = await cur.fetchall()
         return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # Bench runs
+    # ------------------------------------------------------------------
+
+    async def create_bench_run(
+        self,
+        host_id: str,
+        mission: str,
+        started_at: str,
+        ended_at: str | None = None,
+        duration_s: int | None = None,
+        notes: str | None = None,
+    ) -> str:
+        run_id = "brun_" + secrets.token_hex(6)
+        now = _now_iso()
+        assert self._conn
+        await self._conn.execute(
+            """
+            INSERT INTO bench_runs (id, host_id, mission, started_at, ended_at, duration_s, notes, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (run_id, host_id, mission, started_at, ended_at, duration_s, notes, now),
+        )
+        await self._conn.commit()
+        return run_id
+
+    async def insert_bench_timeseries(
+        self,
+        run_id: str,
+        rows: list[dict[str, Any]],
+    ) -> None:
+        assert self._conn
+        await self._conn.executemany(
+            "INSERT INTO bench_timeseries (run_id, elapsed_s, drift_s, groups, units) VALUES (?,?,?,?,?)",
+            [(run_id, r["elapsed_s"], r["drift_s"], r["groups"], r["units"]) for r in rows],
+        )
+        await self._conn.commit()
+
+    async def insert_bench_cpu(
+        self,
+        run_id: str,
+        rows: list[dict[str, Any]],
+    ) -> None:
+        assert self._conn
+        await self._conn.executemany(
+            "INSERT INTO bench_cpu (run_id, elapsed_s, cpu_pct, mem_mb, threads) VALUES (?,?,?,?,?)",
+            [(run_id, r["elapsed_s"], r["cpu_pct"], r["mem_mb"], r["threads"]) for r in rows],
+        )
+        await self._conn.commit()
+
+    async def insert_bench_findings(
+        self,
+        run_id: str,
+        rows: list[dict[str, Any]],
+    ) -> None:
+        assert self._conn
+        await self._conn.executemany(
+            "INSERT INTO bench_findings (run_id, rule_id, severity, detail) VALUES (?,?,?,?)",
+            [(run_id, r["rule_id"], r["severity"], r.get("detail")) for r in rows],
+        )
+        await self._conn.commit()
+
+    async def list_bench_runs(self, host_id: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        assert self._conn
+        if host_id:
+            sql = "SELECT * FROM bench_runs WHERE host_id = ? ORDER BY created_at DESC LIMIT ?"
+            params: tuple = (host_id, limit)
+        else:
+            sql = "SELECT * FROM bench_runs ORDER BY created_at DESC LIMIT ?"
+            params = (limit,)
+        async with self._conn.execute(sql, params) as cur:
+            rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_bench_run(self, run_id: str) -> dict[str, Any] | None:
+        assert self._conn
+        row = await self._get_row("SELECT * FROM bench_runs WHERE id = ?", (run_id,))
+        if not row:
+            return None
+        result = dict(row)
+        async with self._conn.execute(
+            "SELECT elapsed_s, drift_s, groups, units FROM bench_timeseries WHERE run_id = ? ORDER BY elapsed_s",
+            (run_id,),
+        ) as cur:
+            result["bench_timeseries"] = [dict(r) for r in await cur.fetchall()]
+        async with self._conn.execute(
+            "SELECT elapsed_s, cpu_pct, mem_mb, threads FROM bench_cpu WHERE run_id = ? ORDER BY elapsed_s",
+            (run_id,),
+        ) as cur:
+            result["cpu_timeseries"] = [dict(r) for r in await cur.fetchall()]
+        async with self._conn.execute(
+            "SELECT rule_id, severity, detail FROM bench_findings WHERE run_id = ?",
+            (run_id,),
+        ) as cur:
+            result["findings"] = [dict(r) for r in await cur.fetchall()]
+        return result
 
     # ------------------------------------------------------------------
     # Internal helpers

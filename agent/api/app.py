@@ -26,6 +26,7 @@ from .routes import health as health_routes
 from .routes import capabilities as capabilities_routes
 from .routes import instances as instances_routes
 from .routes import actions as actions_routes
+from .routes import bench as bench_routes
 from .routes import jobs as jobs_routes
 from .routes import schedule as schedule_routes
 
@@ -49,6 +50,7 @@ def create_app(config: AgentConfig) -> FastAPI:
     app.state.controller = DcsController(config)
     app.state.job_store = JobStore()
     app.state.nonce_store = NonceStore()
+    app.state.bench_monitor = {"proc": None, "service_name": None}
 
     # /health — no auth, no prefix
     app.include_router(health_routes.router)
@@ -58,6 +60,7 @@ def create_app(config: AgentConfig) -> FastAPI:
     app.include_router(capabilities_routes.router, **_v1_kwargs)
     app.include_router(instances_routes.router, **_v1_kwargs)
     app.include_router(actions_routes.router, **_v1_kwargs)
+    app.include_router(bench_routes.router, **_v1_kwargs)
     app.include_router(jobs_routes.router, **_v1_kwargs)
     app.include_router(schedule_routes.router, **_v1_kwargs)
 

@@ -50,6 +50,7 @@ def create_app(config: AgentConfig) -> FastAPI:
     app.state.controller = DcsController(config)
     app.state.job_store = JobStore()
     app.state.nonce_store = NonceStore()
+    app.state.bench_monitor = {"proc": None, "service_name": None}
 
     # /health — no auth, no prefix
     app.include_router(health_routes.router)

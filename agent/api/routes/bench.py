@@ -1,11 +1,12 @@
 """
-POST /agent/v1/bench/collect — run afterburner bench record + push for a completed run.
+POST /agent/v1/bench/monitor/start — start bench_monitor.py for a given instance
+POST /agent/v1/bench/monitor/stop  — stop the running monitor
+POST /agent/v1/bench/collect       — run afterburner bench record + push after a run
 
-Called by the orchestrator scheduler after DCS has been stopped. Runs:
+Collect flow (called by orchestrator scheduler):
   1. afterburner bench record <miz_path> --log <log_path> [--cpu <bench_csv_path>]
   2. afterburner bench push <orchestrator_url> --host-id <host_id> --key <api_key>
-
-Returns {"run_id": "brun_xxx"} parsed from push stdout.
+  Returns {"run_id": "brun_xxx"} parsed from push stdout.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import sys
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
@@ -24,6 +26,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _RUN_ID_RE = re.compile(r"brun_[0-9a-f]+")
+
+
+class MonitorRequest(BaseModel):
+    service_name: str  # e.g. "DCS-TexasBBQ"
 
 
 class CollectRequest(BaseModel):
@@ -53,6 +59,61 @@ async def _run(cmd: list[str], timeout: float = 90.0) -> str:
     if proc.returncode != 0:
         raise RuntimeError(f"Command failed (exit {proc.returncode}): {output[:500]}")
     return output
+
+
+@router.post("/bench/monitor/start")
+async def start_monitor(payload: MonitorRequest, request: Request) -> dict[str, str]:
+    config = request.app.state.config
+
+    inst = _find_instance(config, payload.service_name)
+    if inst is None:
+        raise HTTPException(status_code=404, detail=f"Instance not found: {payload.service_name}")
+    if not inst.bench_monitor_script:
+        raise HTTPException(status_code=422, detail="bench_monitor_script not configured for this instance")
+    if not inst.bench_csv_path:
+        raise HTTPException(status_code=422, detail="bench_csv_path not configured for this instance")
+
+    monitor_state = request.app.state.bench_monitor
+    if monitor_state.get("proc") is not None:
+        raise HTTPException(status_code=409, detail="Monitor already running")
+
+    cmd = [
+        sys.executable,
+        inst.bench_monitor_script,
+        "--server", inst.saved_games_key,
+        "--out", inst.bench_csv_path,
+    ]
+    logger.info("[bench/monitor] starting: %s", " ".join(cmd))
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    monitor_state["proc"] = proc
+    monitor_state["service_name"] = payload.service_name
+    return {"status": "started", "pid": str(proc.pid)}
+
+
+@router.post("/bench/monitor/stop")
+async def stop_monitor(request: Request) -> dict[str, str]:
+    monitor_state = request.app.state.bench_monitor
+    proc: asyncio.subprocess.Process | None = monitor_state.get("proc")
+    if proc is None:
+        return {"status": "not_running"}
+
+    try:
+        proc.terminate()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            proc.kill()
+    except ProcessLookupError:
+        pass
+
+    monitor_state["proc"] = None
+    monitor_state["service_name"] = None
+    logger.info("[bench/monitor] stopped")
+    return {"status": "stopped"}
 
 
 @router.post("/bench/collect")

@@ -31,7 +31,8 @@ class InstanceConfig:
     auto_start: bool = True
     ports: dict = field(default_factory=dict)  # game/webgui/srs/tacview
     manager: str = "nssm"  # "nssm" or "task" (Windows Task Scheduler)
-    bench_csv_path: str = ""  # path to gm_bench.lua CSV output; empty = skip CPU data
+    bench_csv_path: str = ""  # output path for bench_monitor.py CSV; empty = skip CPU data
+    bench_monitor_script: str = ""  # path to bench_monitor.py; empty = no CPU monitoring
 
 
 @dataclass
@@ -77,6 +78,7 @@ def _parse_instances(raw: list[dict[str, Any]]) -> list[InstanceConfig]:
                 ports=dict(item.get("ports", {})),
                 manager=str(item.get("manager", "nssm")),
                 bench_csv_path=str(item.get("bench_csv_path", "")),
+                bench_monitor_script=str(item.get("bench_monitor_script", "")),
             )
         )
     return parsed

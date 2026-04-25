@@ -77,6 +77,11 @@ class OrchestratorClient:
         self._raise_for_status(resp)
         return resp.json()
 
+    async def _put(self, path: str, body: dict[str, Any] | None = None) -> Any:
+        resp = await self._http.put(path, json=body)
+        self._raise_for_status(resp)
+        return resp.json()
+
     async def _delete(self, path: str) -> None:
         resp = await self._http.delete(path)
         self._raise_for_status(resp)
@@ -199,6 +204,15 @@ class OrchestratorClient:
 
     async def get_update_status(self, host_id: str) -> dict:
         return await self._get(f"/hosts/{host_id}/update/status")
+
+    async def get_instance_schedule(self, instance_id: str) -> dict:
+        return await self._get(f"/instances/{instance_id}/schedule")
+
+    async def set_instance_schedule(self, instance_id: str, schedule: dict) -> dict:
+        return await self._put(f"/instances/{instance_id}/schedule", schedule)
+
+    async def delete_instance_schedule(self, instance_id: str) -> None:
+        await self._delete(f"/instances/{instance_id}/schedule")
 
     async def get_analytics_events(
         self,

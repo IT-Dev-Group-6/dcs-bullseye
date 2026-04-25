@@ -37,6 +37,12 @@ class OrchestratorConfig:
     frp_port_range_start: int = 8800
     frp_port_range_end: int = 8899
     registration_enabled: bool = True
+    # Bench scheduler window in UTC (0200-0700 ET = 0600-1100 UTC during EDT)
+    bench_window_start_utc: str = "06:00"
+    bench_window_end_utc: str = "11:00"
+    # Default host and instance for automated bench runs
+    bench_host_id: str = ""
+    bench_instance_id: str = ""
 
 
 def load_config(path: Path | str = DEFAULT_CONFIG_PATH) -> OrchestratorConfig:
@@ -70,4 +76,8 @@ def load_config(path: Path | str = DEFAULT_CONFIG_PATH) -> OrchestratorConfig:
         frp_port_range_start=int(data.get("frp_port_range_start", 8800)),
         frp_port_range_end=int(data.get("frp_port_range_end", 8899)),
         registration_enabled=bool(data.get("registration_enabled", True)),
+        bench_window_start_utc=str(data.get("bench_window_start_utc", "06:00")),
+        bench_window_end_utc=str(data.get("bench_window_end_utc", "11:00")),
+        bench_host_id=str(data.get("bench_host_id", "")),
+        bench_instance_id=str(data.get("bench_instance_id", "")),
     )

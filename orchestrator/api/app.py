@@ -14,10 +14,12 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..agent_client import AgentClient
+from ..bench_scheduler import BenchScheduler
 from ..config import OrchestratorConfig
 from ..database import Database
 from ..events import Event, EventBus
@@ -31,6 +33,7 @@ from .routes import actions as actions_routes
 from .routes import jobs as jobs_routes
 from .routes import events as events_routes
 from .routes import analytics as analytics_routes
+from .routes import bench as bench_routes
 from .routes import registration as registration_routes
 
 logger = logging.getLogger(__name__)
@@ -106,15 +109,20 @@ def create_app(config: OrchestratorConfig) -> FastAPI:
                 "Set 'api_key' in config before exposing this orchestrator on a network."
             )
         await db.connect()
+        scheduler = BenchScheduler(app, config)
+        app.state.bench_scheduler = scheduler
         poller = asyncio.create_task(_status_poller(app))
+        sched_task = asyncio.create_task(scheduler.run())
         try:
             yield
         finally:
             poller.cancel()
-            try:
-                await poller
-            except asyncio.CancelledError:
-                pass
+            sched_task.cancel()
+            for t in (poller, sched_task):
+                try:
+                    await t
+                except asyncio.CancelledError:
+                    pass
             await db.close()
 
     app = FastAPI(
@@ -125,6 +133,13 @@ def create_app(config: OrchestratorConfig) -> FastAPI:
         redoc_url="/api/v1/redoc",
         openapi_url="/api/v1/openapi.json",
         lifespan=lifespan,
+    )
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["GET", "POST", "DELETE"],
+        allow_headers=["*"],
     )
 
     # Attach shared state
@@ -150,6 +165,9 @@ def create_app(config: OrchestratorConfig) -> FastAPI:
 
     # Analytics POST -- agent-key auth only (no master key); GET covered by _AUTH_DEP via separate include
     app.include_router(analytics_routes.router, prefix="/api/v1")
+
+    # Bench -- POST is agent-key gated; GET is public (no auth, CORS open for GitHub Pages)
+    app.include_router(bench_routes.router, prefix="/api/v1")
 
     # Installer static files — served unauthenticated from /install/
     # Contains agent.zip, install.ps1 (no secrets — secrets come from registration)

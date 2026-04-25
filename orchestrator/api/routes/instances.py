@@ -270,3 +270,52 @@ async def delete_instance_mission(
     except AgentError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.detail)
     return Response(status_code=204)
+
+
+async def _agent_for_instance(db: Database, instance_id: str) -> tuple[dict, dict]:
+    """Return (inst_row, host_row) or raise 404."""
+    inst_row = await _get_instance_or_404(db, instance_id)
+    host_row = await db.get_host(inst_row["host_id"])
+    if host_row is None:
+        raise HTTPException(
+            status_code=404, detail=f"Host {inst_row['host_id']!r} not found"
+        )
+    return inst_row, host_row
+
+
+@router.get("/instances/{instanceId}/schedule")
+async def get_instance_schedule(instanceId: str, request: Request) -> dict:
+    db: Database = request.app.state.db
+    inst_row, host_row = await _agent_for_instance(db, instanceId)
+    agent_base = host_row["agent_url"].rstrip("/") + "/agent/v1"
+    try:
+        async with AgentClient(agent_base, host_row["agent_api_key"]) as client:
+            return await client.get_instance_schedule(inst_row["service_name"])
+    except AgentError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+
+
+@router.put("/instances/{instanceId}/schedule")
+async def set_instance_schedule(instanceId: str, request: Request) -> dict:
+    db: Database = request.app.state.db
+    inst_row, host_row = await _agent_for_instance(db, instanceId)
+    body = await request.json()
+    agent_base = host_row["agent_url"].rstrip("/") + "/agent/v1"
+    try:
+        async with AgentClient(agent_base, host_row["agent_api_key"]) as client:
+            return await client.set_instance_schedule(inst_row["service_name"], body)
+    except AgentError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+
+
+@router.delete("/instances/{instanceId}/schedule", status_code=204)
+async def delete_instance_schedule(instanceId: str, request: Request) -> Response:
+    db: Database = request.app.state.db
+    inst_row, host_row = await _agent_for_instance(db, instanceId)
+    agent_base = host_row["agent_url"].rstrip("/") + "/agent/v1"
+    try:
+        async with AgentClient(agent_base, host_row["agent_api_key"]) as client:
+            await client.delete_instance_schedule(inst_row["service_name"])
+    except AgentError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail)
+    return Response(status_code=204)

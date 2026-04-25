@@ -9,7 +9,7 @@
 
 local UPDATE_INTERVAL = 5 -- seconds between periodic refreshes
 
-local _last_update = -UPDATE_INTERVAL
+local _last_update = 0
 local _mission_loaded = false
 
 -- Player cache: id -> name  (maintained via callbacks, bypasses net.getAllPlayers)
@@ -168,13 +168,13 @@ function agentHook.onSimulationFrame()
 	if not _mission_loaded then
 		return
 	end
-	local ok, t = pcall(DCS.getModelTime)
-	if not ok then
-		return
-	end
-	if t - _last_update >= UPDATE_INTERVAL then
-		_last_update = t
-		_status.mission_time_seconds = math.floor(t)
+	local now = os.time()
+	if now - _last_update >= UPDATE_INTERVAL then
+		_last_update = now
+		local ok, t = pcall(DCS.getModelTime)
+		if ok then
+			_status.mission_time_seconds = math.floor(t)
+		end
 		write_status()
 	end
 end

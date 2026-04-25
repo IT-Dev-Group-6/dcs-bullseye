@@ -113,6 +113,21 @@ class AgentClient:
             raise AgentError(resp.status_code, detail)
         return resp.json()
 
+    async def _put(
+        self, path: str, body: dict[str, Any] | None = None, timeout: float = 10.0
+    ) -> Any:
+        assert self._client, "AgentClient must be used as a context manager"
+        resp = await self._client.put(
+            self._url(path),
+            json=body,
+            timeout=timeout,
+            headers=self._sign_headers("PUT", path),
+        )
+        if not resp.is_success:
+            detail = resp.text[:200]
+            raise AgentError(resp.status_code, detail)
+        return resp.json()
+
     async def _delete(self, path: str, timeout: float = 10.0) -> Any:
         assert self._client, "AgentClient must be used as a context manager"
         resp = await self._client.delete(
@@ -250,3 +265,37 @@ class AgentClient:
     async def get_update_status(self) -> dict[str, Any]:
         """GET /agent/v1/host/update/status — current update progress."""
         return await self._get("/host/update/status")
+
+    async def get_instance_schedule(self, service_name: str) -> dict[str, Any]:
+        """GET /agent/v1/instances/{serviceId}/schedule."""
+        return await self._get(f"/instances/{service_name}/schedule")
+
+    async def set_instance_schedule(
+        self, service_name: str, schedule: dict
+    ) -> dict[str, Any]:
+        """PUT /agent/v1/instances/{serviceId}/schedule."""
+        return await self._put(f"/instances/{service_name}/schedule", schedule)
+
+    async def delete_instance_schedule(self, service_name: str) -> None:
+        """DELETE /agent/v1/instances/{serviceId}/schedule."""
+        await self._delete(f"/instances/{service_name}/schedule")
+
+    async def bench_monitor_start(self, service_name: str) -> dict[str, Any]:
+        """POST /agent/v1/bench/monitor/start — start bench_monitor.py for an instance."""
+        return await self._post(
+            "/bench/monitor/start", body={"service_name": service_name}
+        )
+
+    async def bench_monitor_stop(self) -> dict[str, Any]:
+        """POST /agent/v1/bench/monitor/stop — stop the running bench monitor."""
+        return await self._post("/bench/monitor/stop")
+
+    async def bench_collect(
+        self, mission: str, service_name: str, timeout: float = 120.0
+    ) -> dict[str, Any]:
+        """POST /agent/v1/bench/collect — run afterburner record+push and return run_id."""
+        return await self._post(
+            "/bench/collect",
+            body={"mission": mission, "service_name": service_name},
+            timeout=timeout,
+        )

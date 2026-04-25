@@ -1024,46 +1024,6 @@ class DcsCog(commands.Cog):
         # /dcs jobs [status]                                                #
         # ---------------------------------------------------------------- #
 
-        @self.dcs.command(name="jobs", description="List recent jobs (last 10)")
-        @app_commands.describe(
-            status="Filter by status: queued, running, succeeded, failed"
-        )
-        async def cmd_jobs(
-            interaction: discord.Interaction, status: str | None = None
-        ) -> None:
-            if not await _check_channel(interaction):
-                return
-            await interaction.response.defer()
-            try:
-                all_jobs = await client.list_jobs(status=status)
-                recent = all_jobs[:10]
-                if not recent:
-                    await interaction.followup.send("No jobs found.")
-                    return
-                embed = discord.Embed(
-                    title=f"Recent Jobs{f' ({status})' if status else ''}",
-                    colour=0x3498DB,
-                )
-                for job in recent:
-                    js = job.get("status", "unknown")
-                    dot = (
-                        "🟢" if js == "succeeded" else "🔴" if js == "failed" else "🟡"
-                    )
-                    embed.add_field(
-                        name=f"{dot} `{job.get('id', '—')}`",
-                        value=(
-                            f"Action: `{job.get('action', '—')}`\n"
-                            f"Instance: `{job.get('instanceId', '—')}`\n"
-                            f"Status: **{js}**"
-                        ),
-                        inline=True,
-                    )
-                await interaction.followup.send(embed=embed)
-            except OrchestratorError as exc:
-                await interaction.followup.send(
-                    f"Orchestrator error: {exc.detail}", ephemeral=True
-                )
-
         # ---------------------------------------------------------------- #
         # /dcs mission <instance> <mission_file> [source]                   #
         # ---------------------------------------------------------------- #
@@ -1966,168 +1926,352 @@ class DcsCog(commands.Cog):
                     if not st.get("running", True):
                         break
 
+                # Final poll — ensures terminal state is always shown even if
+                # the last embed edit failed or the loop timed out
+                try:
+                    st = await client.get_update_status(matched["id"])
+                    if status_msg:
+                        await status_msg.edit(
+                            embed=_update_phase_embed(
+                                host, st.get("phase", ""), st.get("message", "")
+                            )
+                        )
+                except Exception:
+                    pass
+
             asyncio.create_task(_poll_update())
 
         # ---------------------------------------------------------------- #
-        # /dcs copy-mission                                                  #
+        # /dcs schedule                                                      #
         # ---------------------------------------------------------------- #
 
-        async def _all_instance_missions_autocomplete(
-            interaction: discord.Interaction,
-            current: str,
-        ) -> list[app_commands.Choice[str]]:
-            """Autocomplete across every instance's Missions folder on every host.
-            Sorted by most-played (analytics). Adds a search hint when results are capped.
-            Value format: '<instance_id>::<filename>'"""
+        @self.dcs.command(
+            name="schedule-view",
+            description="Show the current schedule for a DCS instance",
+        )
+        @app_commands.describe(instance="Instance to check")
+        @app_commands.autocomplete(instance=_instance_autocomplete)
+        async def cmd_schedule_view(
+            interaction: discord.Interaction, instance: str
+        ) -> None:
+            if not await _check_channel(interaction):
+                return
+            await interaction.response.defer(ephemeral=True)
             try:
-                instances = await client.list_instances()
-            except Exception:
-                return []
-
-            # Build play-count map from analytics (mission_name = filename stem)
-            play_counts: dict[str, int] = {}
-            try:
-                events = await client.get_analytics_events(limit=1000)
-                for e in events:
-                    if e.get("event_type") == "mission_start" and e.get("mission_name"):
-                        stem = e["mission_name"]
-                        play_counts[stem] = play_counts.get(stem, 0) + 1
-            except Exception:
-                pass
-
-            low = current.lower()
-            candidates: list[tuple[int, str, str]] = []  # (play_count, label, value)
-            for inst in instances:
-                try:
-                    items = await client.list_missions(inst["id"])
-                except Exception:
-                    continue
-                for filename in items:
-                    if low and low not in filename.lower():
-                        continue
-                    stem = (
-                        filename[:-4] if filename.lower().endswith(".miz") else filename
-                    )
-                    count = play_counts.get(stem, 0)
-                    label = f"{inst['name']} \u203a {filename}"
-                    if count:
-                        label += f" ({count}\u00d7)"
-                    candidates.append((count, label, f"{inst['id']}::{filename}"))
-
-            candidates.sort(key=lambda x: -x[0])
-
-            choices = [
-                app_commands.Choice(name=c[1][:100], value=c[2])
-                for c in candidates[:24]
-            ]
-
-            if len(candidates) > 24:
-                choices.append(
-                    app_commands.Choice(
-                        name=f"... {len(candidates) - 24} more — type a name to search",
-                        value="__hint__",
-                    )
+                sched = await client.get_instance_schedule(instance)
+            except OrchestratorError as exc:
+                await interaction.followup.send(
+                    f"Orchestrator error: {exc.detail}", ephemeral=True
                 )
+                return
 
-            return choices
+            if not sched:
+                await interaction.followup.send(
+                    f"No schedule set for `{instance}`.", ephemeral=True
+                )
+                return
+
+            embed = discord.Embed(title=f"Schedule — `{instance}`", colour=0x3498DB)
+            if sched.get("open_time") or sched.get("close_time"):
+                tz = sched.get("timezone", "UTC")
+                days = ", ".join(sched["days"]) if sched.get("days") else "every day"
+                window = f"{sched.get('open_time', '—')} → {sched.get('close_time', '—')}  ({tz}, {days})"
+                embed.add_field(name="Hours", value=window, inline=False)
+            if sched.get("idle_restart_minutes"):
+                embed.add_field(
+                    name="Idle restart",
+                    value=f"{sched['idle_restart_minutes']} min",
+                    inline=True,
+                )
+            if sched.get("rotate_real_minutes"):
+                embed.add_field(
+                    name="Mission rotation",
+                    value=f"Every {sched['rotate_real_minutes']} min",
+                    inline=True,
+                )
+            if sched.get("mission_playlist"):
+                embed.add_field(
+                    name="Playlist",
+                    value="\n".join(f"• {m}" for m in sched["mission_playlist"]),
+                    inline=False,
+                )
+            await interaction.followup.send(embed=embed, ephemeral=True)
 
         @self.dcs.command(
-            name="copy-mission",
-            description="Copy a mission from any server's Missions folder into the shared Active Missions library",
+            name="schedule-idle",
+            description="Restart an instance automatically after N minutes with no players (0 to disable)",
         )
         @app_commands.describe(
-            source="Server and mission file to copy (type to search)"
+            instance="Instance to configure",
+            minutes="Minutes of inactivity before restart (0 = off)",
         )
-        @app_commands.autocomplete(source=_all_instance_missions_autocomplete)
-        async def cmd_copy_mission(
-            interaction: discord.Interaction, source: str
+        @app_commands.autocomplete(instance=_instance_autocomplete)
+        async def cmd_schedule_idle(
+            interaction: discord.Interaction, instance: str, minutes: int
         ) -> None:
             if not await _check_channel(interaction):
                 return
             if not await _require_operator(interaction):
                 return
+            await interaction.response.defer(ephemeral=True)
+            try:
+                sched = await client.get_instance_schedule(instance) or {}
+                if minutes == 0:
+                    sched.pop("idle_restart_minutes", None)
+                    msg = f"Idle restart **disabled** for `{instance}`."
+                else:
+                    sched["idle_restart_minutes"] = minutes
+                    msg = f"Idle restart set to **{minutes} min** for `{instance}`."
+                await client.set_instance_schedule(instance, sched)
+                await interaction.followup.send(msg, ephemeral=True)
+            except OrchestratorError as exc:
+                await interaction.followup.send(
+                    f"Orchestrator error: {exc.detail}", ephemeral=True
+                )
 
-            if source == "__hint__" or "::" not in source:
-                await interaction.response.send_message(
-                    "Type part of the mission name to filter the list, then select from the results.",
+        # ---- timezone autocomplete ----------------------------------------- #
+
+        async def _timezone_autocomplete(
+            interaction: discord.Interaction,
+            current: str,
+        ) -> list[app_commands.Choice[str]]:
+            zones = [
+                "UTC",
+                "America/New_York",
+                "America/Chicago",
+                "America/Denver",
+                "America/Los_Angeles",
+                "America/Anchorage",
+                "America/Halifax",
+                "America/Sao_Paulo",
+                "Europe/London",
+                "Europe/Paris",
+                "Europe/Berlin",
+                "Europe/Helsinki",
+                "Europe/Moscow",
+                "Asia/Dubai",
+                "Asia/Kolkata",
+                "Asia/Bangkok",
+                "Asia/Singapore",
+                "Asia/Tokyo",
+                "Asia/Seoul",
+                "Australia/Sydney",
+                "Australia/Perth",
+                "Pacific/Auckland",
+                "Pacific/Honolulu",
+            ]
+            low = current.lower()
+            return [
+                app_commands.Choice(name=z, value=z) for z in zones if low in z.lower()
+            ][:25]
+
+        # ---- days autocomplete --------------------------------------------- #
+
+        async def _days_autocomplete(
+            interaction: discord.Interaction,
+            current: str,
+        ) -> list[app_commands.Choice[str]]:
+            presets = [
+                ("All days", "mon,tue,wed,thu,fri,sat,sun"),
+                ("Weekdays", "mon,tue,wed,thu,fri"),
+                ("Weekends", "sat,sun"),
+                ("Fri–Sun", "fri,sat,sun"),
+                ("Sat–Sun", "sat,sun"),
+                ("Thu–Sun", "thu,fri,sat,sun"),
+                ("Monday", "mon"),
+                ("Tuesday", "tue"),
+                ("Wednesday", "wed"),
+                ("Thursday", "thu"),
+                ("Friday", "fri"),
+                ("Saturday", "sat"),
+                ("Sunday", "sun"),
+            ]
+            low = current.lower()
+            return [
+                app_commands.Choice(name=label, value=value)
+                for label, value in presets
+                if low in label.lower() or low in value.lower()
+            ][:25]
+
+        # ---- playlist mission autocomplete ---------------------------------- #
+
+        async def _playlist_mission_autocomplete(
+            interaction: discord.Interaction,
+            current: str,
+        ) -> list[app_commands.Choice[str]]:
+            instance_name = getattr(interaction.namespace, "instance", None)
+            if not instance_name:
+                return []
+            try:
+                instances = await client.list_instances()
+                inst = next((i for i in instances if i["name"] == instance_name), None)
+                if not inst:
+                    return []
+                items = await client.list_active_missions(inst["hostId"])
+            except Exception:
+                return []
+            ns = interaction.namespace
+            already = {getattr(ns, f"mission_{i}", None) for i in range(1, 6)} - {
+                None,
+                current,
+            }
+            low = current.lower()
+            choices = []
+            for m in items:
+                filename = m.get("relative_path", m.get("name", ""))
+                if not filename or filename in already:
+                    continue
+                if low and low not in filename.lower():
+                    continue
+                choices.append(app_commands.Choice(name=filename[:100], value=filename))
+            return choices[:25]
+
+        @self.dcs.command(
+            name="schedule-hours",
+            description="Set open/close times for a DCS instance",
+        )
+        @app_commands.describe(
+            instance="Instance to configure",
+            open_time='Time to start the server, e.g. "18:00"',
+            close_time='Time to stop the server (only if empty), e.g. "02:00"',
+            timezone="IANA timezone (pick from list or type)",
+            days="Active days (pick a preset or type comma-separated)",
+        )
+        @app_commands.autocomplete(
+            instance=_instance_autocomplete,
+            timezone=_timezone_autocomplete,
+            days=_days_autocomplete,
+        )
+        async def cmd_schedule_hours(
+            interaction: discord.Interaction,
+            instance: str,
+            open_time: str | None = None,
+            close_time: str | None = None,
+            timezone: str | None = None,
+            days: str | None = None,
+        ) -> None:
+            if not await _check_channel(interaction):
+                return
+            if not await _require_operator(interaction):
+                return
+            await interaction.response.defer(ephemeral=True)
+            if not open_time and not close_time and timezone is None and not days:
+                await interaction.followup.send(
+                    "Provide at least one field to update.",
                     ephemeral=True,
                 )
                 return
-
-            instance_id, filename = source.split("::", 1)
-            await interaction.response.defer()
-
             try:
-                result = await client.copy_mission_to_active(instance_id, filename)
+                sched = await client.get_instance_schedule(instance) or {}
+                if open_time:
+                    sched["open_time"] = open_time
+                if close_time:
+                    sched["close_time"] = close_time
+                if timezone is not None:
+                    sched["timezone"] = timezone
+                if days:
+                    sched["days"] = [d.strip().lower() for d in days.split(",")]
+                await client.set_instance_schedule(instance, sched)
+                await interaction.followup.send(
+                    f"Hours updated for `{instance}`.", ephemeral=True
+                )
             except OrchestratorError as exc:
                 await interaction.followup.send(
-                    f"Failed to copy `{filename}`: {exc.detail}", ephemeral=True
+                    f"Orchestrator error: {exc.detail}", ephemeral=True
                 )
-                return
-
-            embed = discord.Embed(
-                title="Mission Copied to Active Library",
-                description=f"`{filename}` is now available in the Active Missions folder.",
-                colour=0x2ECC71,
-            )
-            embed.add_field(
-                name="Size",
-                value=f"{result.get('size_bytes', 0) // 1024} KB",
-                inline=True,
-            )
-            await interaction.followup.send(embed=embed)
-
-        # ---------------------------------------------------------------- #
-        # /dcs remove-host                                                   #
-        # ---------------------------------------------------------------- #
 
         @self.dcs.command(
-            name="remove-host",
-            description="Remove a community host and all its instances from the platform",
+            name="schedule-playlist",
+            description="Set a mission rotation playlist for a DCS instance",
         )
-        @app_commands.describe(host="Host to remove")
-        @app_commands.autocomplete(host=_host_autocomplete)
-        async def cmd_remove_host(interaction: discord.Interaction, host: str) -> None:
+        @app_commands.describe(
+            instance="Instance to configure",
+            mission_1="First mission in the rotation",
+            mission_2="Second mission",
+            mission_3="Third mission",
+            mission_4="Fourth mission",
+            mission_5="Fifth mission",
+            rotate_minutes="Rotate to next mission every N minutes (0 = manual only)",
+        )
+        @app_commands.autocomplete(
+            instance=_instance_autocomplete,
+            mission_1=_playlist_mission_autocomplete,
+            mission_2=_playlist_mission_autocomplete,
+            mission_3=_playlist_mission_autocomplete,
+            mission_4=_playlist_mission_autocomplete,
+            mission_5=_playlist_mission_autocomplete,
+        )
+        async def cmd_schedule_playlist(
+            interaction: discord.Interaction,
+            instance: str,
+            mission_1: str,
+            mission_2: str | None = None,
+            mission_3: str | None = None,
+            mission_4: str | None = None,
+            mission_5: str | None = None,
+            rotate_minutes: int = 0,
+        ) -> None:
             if not await _check_channel(interaction):
                 return
-            if not await _require_admin(interaction):
+            if not await _require_operator(interaction):
                 return
-
-            view = _ConfirmView(label="Confirm Remove")
-            await interaction.response.send_message(
-                f"Remove host **{host}** and all its instances from the platform?\n"
-                "This cannot be undone — the host will need a new invite code to re-register.",
-                view=view,
-                ephemeral=True,
-            )
-            await view.wait()
-            if not view.confirmed:
-                await interaction.edit_original_response(
-                    content="Cancelled.", view=None
-                )
-                return
-
-            await interaction.edit_original_response(
-                content="Removing host…", view=None
-            )
+            await interaction.response.defer(ephemeral=True)
             try:
-                hosts = await client.list_hosts()
-                matched = next((h for h in hosts if h["name"] == host), None)
-                if not matched:
-                    await interaction.edit_original_response(
-                        content=f"Host `{host}` not found.", view=None
-                    )
-                    return
-                await client.remove_host(matched["id"])
-            except OrchestratorError as exc:
-                await interaction.edit_original_response(
-                    content=f"Failed to remove host: {exc.detail}", view=None
+                sched = await client.get_instance_schedule(instance) or {}
+                playlist = [
+                    m
+                    for m in [mission_1, mission_2, mission_3, mission_4, mission_5]
+                    if m
+                ]
+                sched["mission_playlist"] = playlist
+                if rotate_minutes > 0:
+                    sched["rotate_real_minutes"] = rotate_minutes
+                else:
+                    sched.pop("rotate_real_minutes", None)
+                await client.set_instance_schedule(instance, sched)
+                lines = "\n".join(f"• {m}" for m in playlist)
+                rotation = (
+                    f"\nRotation: every **{rotate_minutes} min**"
+                    if rotate_minutes > 0
+                    else ""
                 )
-                return
+                await interaction.followup.send(
+                    f"Playlist updated for `{instance}`:\n{lines}{rotation}",
+                    ephemeral=True,
+                )
+            except OrchestratorError as exc:
+                await interaction.followup.send(
+                    f"Orchestrator error: {exc.detail}", ephemeral=True
+                )
 
-            await interaction.edit_original_response(
-                content=f"Host **{host}** has been removed.", view=None
-            )
+        @self.dcs.command(
+            name="schedule-clear",
+            description="Remove all scheduling from a DCS instance",
+        )
+        @app_commands.describe(instance="Instance to clear schedule for")
+        @app_commands.autocomplete(instance=_instance_autocomplete)
+        async def cmd_schedule_clear(
+            interaction: discord.Interaction, instance: str
+        ) -> None:
+            if not await _check_channel(interaction):
+                return
+            if not await _require_operator(interaction):
+                return
+            await interaction.response.defer(ephemeral=True)
+            try:
+                await client.delete_instance_schedule(instance)
+                await interaction.followup.send(
+                    f"Schedule cleared for `{instance}`.", ephemeral=True
+                )
+            except OrchestratorError as exc:
+                if exc.status_code == 404:
+                    await interaction.followup.send(
+                        f"No schedule was set for `{instance}`.", ephemeral=True
+                    )
+                else:
+                    await interaction.followup.send(
+                        f"Orchestrator error: {exc.detail}", ephemeral=True
+                    )
 
         # ---------------------------------------------------------------- #
         # /dcs register                                                      #

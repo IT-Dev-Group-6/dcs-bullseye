@@ -1,8 +1,10 @@
 name: Luacheck
 
-on: 
+on:
   push:
+    paths: ['**/*.lua']
   pull_request:
+    paths: ['**/*.lua']
   merge_group:
 
 jobs:

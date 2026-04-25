@@ -8,9 +8,9 @@ All commands are under `/dcs` and must be used in the designated bot channel.
 
 | Role | Access |
 |------|--------|
-| Everyone | `status`, `hosts`, `jobs`, `stats`, `mystats`, `register` |
-| **DCS Operator** | All commands except `reboot`, `update`, `remove-host` |
-| **DCS Admin** | All commands including `reboot`, `update`, and `remove-host` |
+| Everyone | `status`, `hosts`, `stats`, `mystats`, `register` |
+| **DCS Operator** | All commands except `reboot` and `update` |
+| **DCS Admin** | All commands including `reboot` and `update` |
 
 The Operator and Admin role names are configured by the server admin (`OPERATOR_ROLE` and `ADMIN_ROLE` env vars).
 
@@ -39,9 +39,6 @@ Restarts every instance that is currently running. Useful after uploading a new 
 
 ### `/dcs mission <instance> <filename>`
 Loads a mission file and restarts the server. The filename autocompletes from the Active Missions folders across **all** hosts, sorted by most-played. If the selected mission lives on a different host than the target instance, it is automatically downloaded and transferred before the load — no manual copying needed.
-
-### `/dcs copy-mission <source>`
-Copies a `.miz` file from any server's per-instance Missions folder into that host's Active Missions library, making it available to load. Autocompletes across all instances on all hosts, sorted by most-played with play counts shown. Type to search if the list is capped at 24.
 
 ### `/dcs upload <file>`
 Uploads a `.miz` file from your computer directly to the Active Missions folder on the host. Drag and drop the file into Discord when prompted.
@@ -73,6 +70,36 @@ Stops all DCS servers on a specific host, runs the DCS World updater, then resta
 
 ---
 
+## Scheduling
+
+Scheduling lets the bot automatically manage server hours, idle restarts, and mission rotation without manual intervention. Each setting is independent — you can set just idle restart, just a time window, or combine all three. Settings persist across agent restarts.
+
+### `/dcs schedule-view <instance>`
+Shows the current schedule for an instance — open/close hours, idle restart threshold, and mission playlist if set.
+
+### `/dcs schedule-idle <instance> <minutes>`
+Automatically restarts the server after it has had zero players for the specified number of minutes. Set to `0` to disable.
+
+**Example:** `/dcs schedule-idle MyServer 30` — restart after 30 minutes with no players.
+
+### `/dcs schedule-hours <instance> [open_time] [close_time] [timezone] [days]`
+Sets automatic open and close times for a server. The server starts at `open_time` if stopped and shuts down at `close_time` if empty. Any field can be set independently — you can update just the timezone without re-entering times. Overnight windows (e.g. `18:00` → `02:00`) are handled correctly.
+
+- `timezone` — pick from the autocomplete list or type any IANA timezone (default `UTC`)
+- `days` — pick a preset from the autocomplete list or type comma-separated day abbreviations, e.g. `fri,sat,sun` (default: every day)
+
+**Example:** `/dcs schedule-hours MyServer 18:00 02:00 America/New_York fri,sat,sun`
+
+### `/dcs schedule-playlist <instance> <mission_1> [mission_2] ... [mission_5] [rotate_minutes]`
+Sets a mission rotation playlist with up to 5 missions. Each slot has its own autocomplete pulling from the instance's Active Missions folder — already-selected missions are filtered out of subsequent slots. If `rotate_minutes` is set, the server automatically loads the next mission after that many wall-clock minutes. Set `rotate_minutes` to `0` to keep the playlist without auto-rotation.
+
+**Example:** Select `mission_1`, then `mission_2`, etc. from the autocomplete dropdowns.
+
+### `/dcs schedule-clear <instance>`
+Removes all scheduling from an instance. The server will no longer auto-start, auto-stop, idle-restart, or rotate missions.
+
+---
+
 ## Analytics
 
 ### `/dcs stats [instance] [period]`
@@ -100,14 +127,8 @@ Shows your personal stats based on your registered DCS pilot name. Response is e
 ### `/dcs hosts`
 Lists all registered host machines, their agent connection status, and last seen time.
 
-### `/dcs jobs [status]`
-Lists the last 10 background jobs (start, stop, mission load, etc.) and their status. Filter by `queued`, `running`, `succeeded`, or `failed` to troubleshoot stuck operations.
-
 ### `/dcs invite [host_name] [expires_in_hours]`
 Generates a one-time invite code for a new community host to join the platform. The response is ephemeral and includes the full PowerShell install command ready to send. Codes expire in 24 hours by default; set `expires_in_hours` to any value between 1 and 168 (7 days max).
-
-### `/dcs remove-host <host>`
-Removes a community host and all its instances from the platform. Requires **DCS Admin** role and a confirmation button click. The host will need a new invite code to re-register. Does not touch the host machine itself — run the uninstall script on the Windows machine separately.
 
 ### `/dcs clear`
 Deletes recent bot messages from the channel. Useful for cleaning up after a busy session.
@@ -130,6 +151,6 @@ If an instance crashes and restarts **3 or more times within 10 minutes**, the b
 ## Notes
 
 - All server control commands (start, stop, restart, mission load, etc.) run as **background jobs**. The bot will report when they complete or fail.
-- `/dcs reboot`, `/dcs delete`, `/dcs resetpersist`, and `/dcs remove-host` require a confirmation button click before executing.
+- `/dcs reboot`, `/dcs delete`, and `/dcs resetpersist` require a confirmation button click before executing.
 - The bot will only respond in the configured bot channel. Commands used elsewhere are silently ignored.
 - Analytics data is collected automatically by the agent on each managed host. Stats will be empty until the agent has been running for at least one poll cycle (60 seconds).

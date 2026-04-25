@@ -128,6 +128,23 @@ CREATE TABLE IF NOT EXISTS bench_findings (
 CREATE INDEX IF NOT EXISTS idx_bench_findings_run ON bench_findings(run_id);
 """
 
+_CREATE_BENCH_QUEUE = """
+CREATE TABLE IF NOT EXISTS bench_queue (
+    id           TEXT PRIMARY KEY,
+    miz_filename TEXT NOT NULL,
+    miz_data     BLOB NOT NULL,
+    host_id      TEXT NOT NULL,
+    instance_id  TEXT NOT NULL,
+    duration_s   INTEGER NOT NULL DEFAULT 1800,
+    status       TEXT NOT NULL DEFAULT 'pending',
+    created_at   TEXT NOT NULL,
+    started_at   TEXT,
+    completed_at TEXT,
+    run_id       TEXT,
+    error        TEXT
+);
+"""
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -143,6 +160,12 @@ def _host_row_to_dict(row: aiosqlite.Row) -> dict[str, Any]:
 def _inst_row_to_dict(row: aiosqlite.Row) -> dict[str, Any]:
     d = dict(row)
     d["tags"] = json.loads(d["tags"])
+    return d
+
+
+def _queue_row_to_dict(row: aiosqlite.Row) -> dict[str, Any]:
+    d = dict(row)
+    d.pop("miz_data", None)  # never expose raw bytes over API
     return d
 
 
@@ -165,6 +188,7 @@ class Database:
         await self._conn.executescript(_CREATE_BENCH_TIMESERIES)
         await self._conn.executescript(_CREATE_BENCH_CPU)
         await self._conn.executescript(_CREATE_BENCH_FINDINGS)
+        await self._conn.execute(_CREATE_BENCH_QUEUE)
         # Safe migration: add frp_port column if missing
         try:
             await self._conn.execute(_MIGRATE_HOSTS_FRP)
@@ -620,6 +644,88 @@ class Database:
         ) as cur:
             result["findings"] = [dict(r) for r in await cur.fetchall()]
         return result
+
+    # ------------------------------------------------------------------
+    # Bench queue
+    # ------------------------------------------------------------------
+
+    async def enqueue_bench(
+        self,
+        miz_filename: str,
+        miz_data: bytes,
+        host_id: str,
+        instance_id: str,
+        duration_s: int = 1800,
+    ) -> dict[str, Any]:
+        item_id = "bq_" + secrets.token_hex(6)
+        now = _now_iso()
+        assert self._conn
+        await self._conn.execute(
+            """
+            INSERT INTO bench_queue
+                (id, miz_filename, miz_data, host_id, instance_id, duration_s, status, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
+            """,
+            (item_id, miz_filename, miz_data, host_id, instance_id, duration_s, now),
+        )
+        await self._conn.commit()
+        row = await self._get_row("SELECT * FROM bench_queue WHERE id = ?", (item_id,))
+        assert row is not None
+        return _queue_row_to_dict(row)
+
+    async def list_queue(self) -> list[dict[str, Any]]:
+        assert self._conn
+        async with self._conn.execute(
+            "SELECT * FROM bench_queue ORDER BY created_at ASC"
+        ) as cur:
+            rows = await cur.fetchall()
+        return [_queue_row_to_dict(r) for r in rows]
+
+    async def get_queue_item(self, item_id: str) -> dict[str, Any] | None:
+        row = await self._get_row("SELECT * FROM bench_queue WHERE id = ?", (item_id,))
+        return _queue_row_to_dict(row) if row else None
+
+    async def delete_queue_item(self, item_id: str) -> bool:
+        assert self._conn
+        cur = await self._conn.execute(
+            "DELETE FROM bench_queue WHERE id = ? AND status = 'pending'", (item_id,)
+        )
+        await self._conn.commit()
+        return (cur.rowcount or 0) > 0
+
+    async def dequeue_next_pending(self) -> dict[str, Any] | None:
+        """Return the oldest pending item without changing its status."""
+        row = await self._get_row(
+            "SELECT * FROM bench_queue WHERE status = 'pending' ORDER BY created_at ASC LIMIT 1",
+            (),
+        )
+        return _queue_row_to_dict(row) if row else None
+
+    async def update_queue_status(
+        self,
+        item_id: str,
+        status: str,
+        started_at: str | None = None,
+        completed_at: str | None = None,
+        run_id: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        assert self._conn
+        fields: dict[str, Any] = {"status": status}
+        if started_at is not None:
+            fields["started_at"] = started_at
+        if completed_at is not None:
+            fields["completed_at"] = completed_at
+        if run_id is not None:
+            fields["run_id"] = run_id
+        if error is not None:
+            fields["error"] = error
+        set_clause = ", ".join(f"{k} = ?" for k in fields)
+        values = list(fields.values()) + [item_id]
+        await self._conn.execute(
+            f"UPDATE bench_queue SET {set_clause} WHERE id = ?", values
+        )
+        await self._conn.commit()
 
     # ------------------------------------------------------------------
     # Internal helpers

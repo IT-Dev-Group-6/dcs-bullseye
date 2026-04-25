@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from ..agent_client import AgentClient
+from ..bench_scheduler import BenchScheduler
 from ..config import OrchestratorConfig
 from ..database import Database
 from ..events import Event, EventBus
@@ -108,15 +109,20 @@ def create_app(config: OrchestratorConfig) -> FastAPI:
                 "Set 'api_key' in config before exposing this orchestrator on a network."
             )
         await db.connect()
+        scheduler = BenchScheduler(app, config)
+        app.state.bench_scheduler = scheduler
         poller = asyncio.create_task(_status_poller(app))
+        sched_task = asyncio.create_task(scheduler.run())
         try:
             yield
         finally:
             poller.cancel()
-            try:
-                await poller
-            except asyncio.CancelledError:
-                pass
+            sched_task.cancel()
+            for t in (poller, sched_task):
+                try:
+                    await t
+                except asyncio.CancelledError:
+                    pass
             await db.close()
 
     app = FastAPI(
@@ -132,7 +138,7 @@ def create_app(config: OrchestratorConfig) -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["*"],
     )
 

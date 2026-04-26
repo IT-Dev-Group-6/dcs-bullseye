@@ -32,6 +32,10 @@ class MonitorRequest(BaseModel):
     service_name: str  # e.g. "DCS-TexasBBQ"
 
 
+class InjectRequest(BaseModel):
+    mission: str  # bare filename, e.g. "mymission.miz"
+
+
 class CollectRequest(BaseModel):
     mission: str  # bare filename, e.g. "mymission.miz"
     service_name: str  # instance service_name, e.g. "DCS-TexasBBQ"
@@ -125,6 +129,42 @@ async def stop_monitor(request: Request) -> dict[str, str]:
     return {"status": "stopped"}
 
 
+@router.post("/bench/inject")
+async def inject_bench(payload: InjectRequest, request: Request) -> dict[str, str]:
+    config = request.app.state.config
+    active_dir = config.active_missions_dir
+    if not active_dir:
+        raise HTTPException(status_code=503, detail="active_missions_dir not configured")
+
+    miz_path = Path(active_dir) / payload.mission
+    if not miz_path.exists():
+        raise HTTPException(status_code=404, detail=f"Mission not found: {payload.mission}")
+
+    tmp_path = miz_path.parent / (miz_path.stem + ".injecting.miz")
+    tmp_path.unlink(missing_ok=True)
+
+    afterburner = config.afterburner_bin
+    cmd = [afterburner, "bench", "inject", str(miz_path), "--output", str(tmp_path)]
+    logger.info("[bench/inject] injecting gm_bench into %s", miz_path.name)
+    try:
+        await _run(cmd, timeout=60.0)
+    except RuntimeError as exc:
+        tmp_path.unlink(missing_ok=True)
+        if "already present" in str(exc):
+            logger.info("[bench/inject] already injected, skipping")
+            return {"status": "already_injected"}
+        raise HTTPException(status_code=500, detail=f"bench inject failed: {exc}")
+
+    try:
+        tmp_path.replace(miz_path)
+    except OSError as exc:
+        tmp_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=f"Failed to replace mission file: {exc}")
+
+    logger.info("[bench/inject] done: %s", miz_path.name)
+    return {"status": "injected"}
+
+
 @router.post("/bench/collect")
 async def collect_bench(payload: CollectRequest, request: Request) -> dict[str, str]:
     config = request.app.state.config
@@ -151,7 +191,7 @@ async def collect_bench(payload: CollectRequest, request: Request) -> dict[str, 
 
     # Build record command
     record_cmd = [afterburner, "bench", "record", miz_path, "--log", inst.log_path]
-    if inst.bench_csv_path:
+    if inst.bench_csv_path and Path(inst.bench_csv_path).exists():
         record_cmd += ["--cpu", inst.bench_csv_path]
 
     logger.info("[bench/collect] recording: %s", " ".join(record_cmd))

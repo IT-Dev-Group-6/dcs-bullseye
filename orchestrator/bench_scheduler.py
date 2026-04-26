@@ -3,12 +3,16 @@ Bench scheduler — runs queued bench jobs during the configured UTC time window
 
 Picks the oldest pending item from bench_queue, orchestrates the full run:
   1. Upload .miz to agent active_missions_dir
-  2. mission_load on the target instance
-  3. Wait 60s for DCS to settle + duration_s for the bench run
-  4. Stop DCS
-  5. Call agent POST /bench/collect (runs afterburner record + push)
-  6. Delete the .miz from the agent
-  7. Mark the queue item done (or failed)
+  2. Inject gm_bench.lua into the .miz (non-fatal if unavailable)
+  3. mission_load on the target instance
+  4. Wait 60s for DCS to settle
+  5. Start CPU monitor (DCS is now running)
+  6. Wait duration_s for the bench run
+  7. Stop DCS
+  8. Stop CPU monitor
+  9. Call agent POST /bench/collect (runs afterburner record + push)
+  10. Delete the .miz from the agent
+  11. Mark the queue item done (or failed)
 
 The manual trigger endpoint (POST /bench/queue/{id}/run) calls run_item() directly,
 bypassing the window check.
@@ -129,7 +133,33 @@ class BenchScheduler:
             logger.info("[bench/sched] uploading %s to agent", miz_filename)
             await client.upload_active_mission(miz_filename, miz_data, timeout=120.0)
 
-            # 2. Start CPU monitor (non-fatal if not configured)
+            # 2. Inject gm_bench.lua so DCS emits bench timing to dcs.log
+            logger.info("[bench/sched] injecting gm_bench into %s", miz_filename)
+            try:
+                inject_result = await client.bench_inject(miz_filename, timeout=60.0)
+                logger.info(
+                    "[bench/sched] inject: %s", inject_result.get("status", "ok")
+                )
+            except AgentError as exc:
+                logger.warning(
+                    "[bench/sched] inject failed (%s) — no bench samples will be recorded",
+                    exc,
+                )
+
+            # 3. Load mission (stops DCS, loads, starts)
+            logger.info("[bench/sched] loading mission on %s", service_name)
+            await client.trigger_action(
+                service_name, "mission_load", {"mission": miz_filename}
+            )
+
+            # 4. Wait for DCS to settle before starting monitor and bench timer
+            logger.info(
+                "[bench/sched] waiting %ds for DCS to settle",
+                int(_SETTLE_DELAY),
+            )
+            await asyncio.sleep(_SETTLE_DELAY)
+
+            # 5. Start CPU monitor now that DCS is running (non-fatal if not configured)
             monitor_started = False
             try:
                 await client.bench_monitor_start(service_name)
@@ -140,27 +170,16 @@ class BenchScheduler:
                     "[bench/sched] monitor start skipped (%s) — no CPU data", exc
                 )
 
-            # 3. Load mission (stops DCS, loads, starts)
-            logger.info("[bench/sched] loading mission on %s", service_name)
-            await client.trigger_action(
-                service_name, "mission_load", {"mission": miz_filename}
-            )
-
-            # 4. Wait for DCS to settle, then run for duration
-            logger.info(
-                "[bench/sched] waiting %ds settle + %ds bench",
-                int(_SETTLE_DELAY),
-                duration_s,
-            )
-            await asyncio.sleep(_SETTLE_DELAY)
+            # 6. Run for bench duration
+            logger.info("[bench/sched] bench running for %ds", duration_s)
             await asyncio.sleep(duration_s)
 
-            # 5. Stop DCS
+            # 7. Stop DCS
             logger.info("[bench/sched] stopping %s", service_name)
             await client.trigger_action(service_name, "stop")
             await asyncio.sleep(10)  # brief pause so log flush completes
 
-            # 6. Stop CPU monitor
+            # 8. Stop CPU monitor
             if monitor_started:
                 try:
                     await client.bench_monitor_stop()
@@ -170,14 +189,14 @@ class BenchScheduler:
                         "[bench/sched] monitor stop failed (non-fatal): %s", exc
                     )
 
-            # 7. Collect bench data via afterburner
+            # 9. Collect bench data via afterburner
             logger.info("[bench/sched] collecting bench data")
             result = await client.bench_collect(
                 miz_filename, service_name, timeout=120.0
             )
             run_id: str = result.get("run_id", "")
 
-            # 8. Clean up the .miz
+            # 10. Clean up the .miz
             logger.info("[bench/sched] deleting %s from agent", miz_filename)
             try:
                 await client.delete_active_mission(miz_filename)

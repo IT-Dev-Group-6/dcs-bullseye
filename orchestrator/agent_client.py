@@ -280,6 +280,14 @@ class AgentClient:
         """DELETE /agent/v1/instances/{serviceId}/schedule."""
         await self._delete(f"/instances/{service_name}/schedule")
 
+    async def bench_inject(self, mission: str, timeout: float = 60.0) -> dict[str, Any]:
+        """POST /agent/v1/bench/inject — inject gm_bench.lua into the .miz in-place."""
+        return await self._post(
+            "/bench/inject",
+            body={"mission": mission},
+            timeout=timeout,
+        )
+
     async def bench_monitor_start(self, service_name: str) -> dict[str, Any]:
         """POST /agent/v1/bench/monitor/start — start bench_monitor.py for an instance."""
         return await self._post(

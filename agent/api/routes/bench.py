@@ -151,7 +151,7 @@ async def collect_bench(payload: CollectRequest, request: Request) -> dict[str, 
 
     # Build record command
     record_cmd = [afterburner, "bench", "record", miz_path, "--log", inst.log_path]
-    if inst.bench_csv_path:
+    if inst.bench_csv_path and Path(inst.bench_csv_path).exists():
         record_cmd += ["--cpu", inst.bench_csv_path]
 
     logger.info("[bench/collect] recording: %s", " ".join(record_cmd))

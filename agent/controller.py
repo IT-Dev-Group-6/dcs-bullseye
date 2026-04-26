@@ -244,19 +244,18 @@ def _task_stop(saved_games_key: str, task_name: str = "") -> None:
 
     Also ends the Task Scheduler task so its status clears from 'Running', which
     allows schtasks /run to start a new instance immediately after.
+    No-op if the process is not running.
     """
     ps = (
         f"$p = Get-CimInstance Win32_Process -Filter \"name='DCS_server.exe'\" "
         f"| Where-Object {{ $_.CommandLine -like '*{saved_games_key}*' }}; "
-        f"if ($p) {{ Stop-Process -Id $p.ProcessId -Force; exit 0 }} else {{ exit 1 }}"
+        f"if ($p) {{ Stop-Process -Id $p.ProcessId -Force }}"
     )
-    result = subprocess.run(
+    subprocess.run(
         ["powershell", "-NoProfile", "-Command", ps],
         capture_output=True,
         text=True,
     )
-    if result.returncode != 0:
-        raise RuntimeError(f"Could not find/stop DCS process for {saved_games_key!r}")
     # Clear the Task Scheduler "Running" state so the next /run isn't ignored
     if task_name:
         subprocess.run(

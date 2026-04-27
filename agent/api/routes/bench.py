@@ -39,6 +39,8 @@ class InjectRequest(BaseModel):
 class CollectRequest(BaseModel):
     mission: str  # bare filename, e.g. "mymission.miz"
     service_name: str  # instance service_name, e.g. "DCS-TexasBBQ"
+    intended_duration_s: int | None = None
+    injection_status: str | None = None
 
 
 def _find_instance(config, service_name: str) -> InstanceConfig | None:
@@ -85,7 +87,17 @@ async def start_monitor(payload: MonitorRequest, request: Request) -> dict[str, 
         )
 
     monitor_state = request.app.state.bench_monitor
-    if monitor_state.get("proc") is not None:
+    existing: asyncio.subprocess.Process | None = monitor_state.get("proc")
+    if existing is not None and existing.returncode is not None:
+        logger.warning(
+            "[bench/monitor] clearing exited monitor process pid=%s rc=%s",
+            existing.pid,
+            existing.returncode,
+        )
+        monitor_state["proc"] = None
+        monitor_state["service_name"] = None
+        existing = None
+    if existing is not None:
         raise HTTPException(status_code=409, detail="Monitor already running")
 
     cmd = [
@@ -134,11 +146,15 @@ async def inject_bench(payload: InjectRequest, request: Request) -> dict[str, st
     config = request.app.state.config
     active_dir = config.active_missions_dir
     if not active_dir:
-        raise HTTPException(status_code=503, detail="active_missions_dir not configured")
+        raise HTTPException(
+            status_code=503, detail="active_missions_dir not configured"
+        )
 
     miz_path = Path(active_dir) / payload.mission
     if not miz_path.exists():
-        raise HTTPException(status_code=404, detail=f"Mission not found: {payload.mission}")
+        raise HTTPException(
+            status_code=404, detail=f"Mission not found: {payload.mission}"
+        )
 
     tmp_path = miz_path.parent / (miz_path.stem + ".injecting.miz")
     tmp_path.unlink(missing_ok=True)
@@ -159,7 +175,9 @@ async def inject_bench(payload: InjectRequest, request: Request) -> dict[str, st
         tmp_path.replace(miz_path)
     except OSError as exc:
         tmp_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=500, detail=f"Failed to replace mission file: {exc}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to replace mission file: {exc}"
+        )
 
     logger.info("[bench/inject] done: %s", miz_path.name)
     return {"status": "injected"}
@@ -193,6 +211,10 @@ async def collect_bench(payload: CollectRequest, request: Request) -> dict[str, 
     record_cmd = [afterburner, "bench", "record", miz_path, "--log", inst.log_path]
     if inst.bench_csv_path and Path(inst.bench_csv_path).exists():
         record_cmd += ["--cpu", inst.bench_csv_path]
+    if payload.intended_duration_s is not None:
+        record_cmd += ["--intended-duration", str(payload.intended_duration_s)]
+    if payload.injection_status:
+        record_cmd += ["--injection-status", payload.injection_status]
 
     logger.info("[bench/collect] recording: %s", " ".join(record_cmd))
     try:

@@ -53,15 +53,30 @@ class BenchFinding(BaseModel):
     detail: str | None = None
 
 
+class BenchLogIssue(BaseModel):
+    issue_type: str
+    signature: str
+    count: int
+    first_line: str | None = None
+    last_line: str | None = None
+    detail: str | None = None
+
+
 class BenchRunPayload(BaseModel):
     mission: str
     started_at: str
     ended_at: str | None = None
     duration_s: int | None = None
+    intended_duration_s: int | None = None
+    bench_elapsed_s: int | None = None
+    run_quality: str = "unknown"
+    injection_status: str | None = None
+    hard_stop_error: str | None = None
     notes: str | None = None
     bench_timeseries: list[BenchTimeseriesRow] = []
     cpu_timeseries: list[BenchCpuRow] = []
     findings: list[BenchFinding] = []
+    log_issues: list[BenchLogIssue] = []
 
 
 @router.post("/bench/runs", status_code=201)
@@ -82,6 +97,11 @@ async def ingest_bench_run(
         started_at=payload.started_at,
         ended_at=payload.ended_at,
         duration_s=payload.duration_s,
+        intended_duration_s=payload.intended_duration_s,
+        bench_elapsed_s=payload.bench_elapsed_s,
+        run_quality=payload.run_quality,
+        injection_status=payload.injection_status,
+        hard_stop_error=payload.hard_stop_error,
         notes=payload.notes,
     )
 
@@ -97,15 +117,21 @@ async def ingest_bench_run(
         await db.insert_bench_findings(
             run_id, [r.model_dump() for r in payload.findings]
         )
+    if payload.log_issues:
+        await db.insert_bench_log_issues(
+            run_id, [r.model_dump() for r in payload.log_issues]
+        )
 
     logger.info(
-        "[bench] run %s recorded for host %s — mission=%s ts=%d cpu=%d findings=%d",
+        "[bench] run %s recorded for host %s — mission=%s ts=%d cpu=%d findings=%d issues=%d quality=%s",
         run_id,
         x_host_id,
         payload.mission,
         len(payload.bench_timeseries),
         len(payload.cpu_timeseries),
         len(payload.findings),
+        len(payload.log_issues),
+        payload.run_quality,
     )
     return {"id": run_id}
 

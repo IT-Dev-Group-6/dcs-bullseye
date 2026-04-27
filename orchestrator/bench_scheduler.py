@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import FastAPI
 
@@ -33,6 +34,12 @@ logger = logging.getLogger(__name__)
 
 _POLL_INTERVAL = 60.0
 _SETTLE_DELAY = 60.0  # seconds between mission_load and starting the bench timer
+
+
+def _bench_miz_filename(item_id: str, original: str) -> str:
+    path = Path(original)
+    suffix = path.suffix if path.suffix else ".miz"
+    return f"{path.stem}__bench_{item_id}{suffix}"
 
 
 def _in_window(start_utc: str, end_utc: str) -> bool:
@@ -117,6 +124,7 @@ class BenchScheduler:
 
         agent_base = host["agent_url"].rstrip("/") + "/agent/v1"
         miz_filename = item["miz_filename"]
+        bench_miz_filename = _bench_miz_filename(item["id"], miz_filename)
         service_name = item["instance_id"]
         duration_s = item["duration_s"]
 
@@ -130,17 +138,26 @@ class BenchScheduler:
 
         async with AgentClient(agent_base, host["agent_api_key"]) as client:
             # 1. Upload .miz to active_missions_dir
-            logger.info("[bench/sched] uploading %s to agent", miz_filename)
-            await client.upload_active_mission(miz_filename, miz_data, timeout=120.0)
+            logger.info(
+                "[bench/sched] uploading %s to agent as %s",
+                miz_filename,
+                bench_miz_filename,
+            )
+            await client.upload_active_mission(
+                bench_miz_filename, miz_data, timeout=120.0
+            )
 
             # 2. Inject gm_bench.lua so DCS emits bench timing to dcs.log
-            logger.info("[bench/sched] injecting gm_bench into %s", miz_filename)
+            logger.info("[bench/sched] injecting gm_bench into %s", bench_miz_filename)
+            injection_status = "unknown"
             try:
-                inject_result = await client.bench_inject(miz_filename, timeout=60.0)
-                logger.info(
-                    "[bench/sched] inject: %s", inject_result.get("status", "ok")
+                inject_result = await client.bench_inject(
+                    bench_miz_filename, timeout=60.0
                 )
+                injection_status = str(inject_result.get("status", "ok"))
+                logger.info("[bench/sched] inject: %s", injection_status)
             except AgentError as exc:
+                injection_status = f"failed:{exc.status_code}"
                 logger.warning(
                     "[bench/sched] inject failed (%s) — no bench samples will be recorded",
                     exc,
@@ -149,7 +166,7 @@ class BenchScheduler:
             # 3. Load mission (stops DCS, loads, starts)
             logger.info("[bench/sched] loading mission on %s", service_name)
             await client.trigger_action(
-                service_name, "mission_load", {"mission": miz_filename}
+                service_name, "mission_load", {"mission": bench_miz_filename}
             )
 
             # 4. Wait for DCS to settle before starting monitor and bench timer
@@ -192,14 +209,18 @@ class BenchScheduler:
             # 9. Collect bench data via afterburner
             logger.info("[bench/sched] collecting bench data")
             result = await client.bench_collect(
-                miz_filename, service_name, timeout=120.0
+                bench_miz_filename,
+                service_name,
+                timeout=120.0,
+                intended_duration_s=duration_s,
+                injection_status=injection_status,
             )
             run_id: str = result.get("run_id", "")
 
             # 10. Clean up the .miz
-            logger.info("[bench/sched] deleting %s from agent", miz_filename)
+            logger.info("[bench/sched] deleting %s from agent", bench_miz_filename)
             try:
-                await client.delete_active_mission(miz_filename)
+                await client.delete_active_mission(bench_miz_filename)
             except AgentError as exc:
                 logger.warning("[bench/sched] delete failed (non-fatal): %s", exc)
 

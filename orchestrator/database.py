@@ -91,6 +91,11 @@ CREATE TABLE IF NOT EXISTS bench_runs (
     started_at  TEXT NOT NULL,
     ended_at    TEXT,
     duration_s  INTEGER,
+    intended_duration_s INTEGER,
+    bench_elapsed_s INTEGER,
+    run_quality TEXT NOT NULL DEFAULT 'unknown',
+    injection_status TEXT,
+    hard_stop_error TEXT,
     notes       TEXT,
     created_at  TEXT NOT NULL
 );
@@ -126,6 +131,19 @@ CREATE TABLE IF NOT EXISTS bench_findings (
     detail   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_bench_findings_run ON bench_findings(run_id);
+"""
+
+_CREATE_BENCH_LOG_ISSUES = """
+CREATE TABLE IF NOT EXISTS bench_log_issues (
+    run_id     TEXT NOT NULL REFERENCES bench_runs(id),
+    issue_type TEXT NOT NULL,
+    signature  TEXT NOT NULL,
+    count      INTEGER NOT NULL,
+    first_line TEXT,
+    last_line  TEXT,
+    detail     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_bench_log_issues_run ON bench_log_issues(run_id);
 """
 
 _CREATE_BENCH_QUEUE = """
@@ -188,12 +206,24 @@ class Database:
         await self._conn.executescript(_CREATE_BENCH_TIMESERIES)
         await self._conn.executescript(_CREATE_BENCH_CPU)
         await self._conn.executescript(_CREATE_BENCH_FINDINGS)
+        await self._conn.executescript(_CREATE_BENCH_LOG_ISSUES)
         await self._conn.execute(_CREATE_BENCH_QUEUE)
         # Safe migration: add frp_port column if missing
         try:
             await self._conn.execute(_MIGRATE_HOSTS_FRP)
         except Exception:
             pass  # column already exists
+        for sql in (
+            "ALTER TABLE bench_runs ADD COLUMN intended_duration_s INTEGER",
+            "ALTER TABLE bench_runs ADD COLUMN bench_elapsed_s INTEGER",
+            "ALTER TABLE bench_runs ADD COLUMN run_quality TEXT NOT NULL DEFAULT 'unknown'",
+            "ALTER TABLE bench_runs ADD COLUMN injection_status TEXT",
+            "ALTER TABLE bench_runs ADD COLUMN hard_stop_error TEXT",
+        ):
+            try:
+                await self._conn.execute(sql)
+            except Exception:
+                pass  # column already exists
         await self._conn.commit()
 
     async def close(self) -> None:
@@ -551,6 +581,11 @@ class Database:
         started_at: str,
         ended_at: str | None = None,
         duration_s: int | None = None,
+        intended_duration_s: int | None = None,
+        bench_elapsed_s: int | None = None,
+        run_quality: str = "unknown",
+        injection_status: str | None = None,
+        hard_stop_error: str | None = None,
         notes: str | None = None,
     ) -> str:
         run_id = "brun_" + secrets.token_hex(6)
@@ -558,10 +593,28 @@ class Database:
         assert self._conn
         await self._conn.execute(
             """
-            INSERT INTO bench_runs (id, host_id, mission, started_at, ended_at, duration_s, notes, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO bench_runs (
+                id, host_id, mission, started_at, ended_at, duration_s,
+                intended_duration_s, bench_elapsed_s, run_quality,
+                injection_status, hard_stop_error, notes, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (run_id, host_id, mission, started_at, ended_at, duration_s, notes, now),
+            (
+                run_id,
+                host_id,
+                mission,
+                started_at,
+                ended_at,
+                duration_s,
+                intended_duration_s,
+                bench_elapsed_s,
+                run_quality,
+                injection_status,
+                hard_stop_error,
+                notes,
+                now,
+            ),
         )
         await self._conn.commit()
         return run_id
@@ -608,6 +661,33 @@ class Database:
         )
         await self._conn.commit()
 
+    async def insert_bench_log_issues(
+        self,
+        run_id: str,
+        rows: list[dict[str, Any]],
+    ) -> None:
+        assert self._conn
+        await self._conn.executemany(
+            """
+            INSERT INTO bench_log_issues
+                (run_id, issue_type, signature, count, first_line, last_line, detail)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    run_id,
+                    r["issue_type"],
+                    r["signature"],
+                    r["count"],
+                    r.get("first_line"),
+                    r.get("last_line"),
+                    r.get("detail"),
+                )
+                for r in rows
+            ],
+        )
+        await self._conn.commit()
+
     async def list_bench_runs(
         self, host_id: str | None = None, limit: int = 100
     ) -> list[dict[str, Any]]:
@@ -643,6 +723,16 @@ class Database:
             (run_id,),
         ) as cur:
             result["findings"] = [dict(r) for r in await cur.fetchall()]
+        async with self._conn.execute(
+            """
+            SELECT issue_type, signature, count, first_line, last_line, detail
+            FROM bench_log_issues
+            WHERE run_id = ?
+            ORDER BY issue_type, count DESC
+            """,
+            (run_id,),
+        ) as cur:
+            result["log_issues"] = [dict(r) for r in await cur.fetchall()]
         return result
 
     # ------------------------------------------------------------------

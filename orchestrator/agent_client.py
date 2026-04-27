@@ -299,11 +299,21 @@ class AgentClient:
         return await self._post("/bench/monitor/stop")
 
     async def bench_collect(
-        self, mission: str, service_name: str, timeout: float = 120.0
+        self,
+        mission: str,
+        service_name: str,
+        timeout: float = 120.0,
+        intended_duration_s: int | None = None,
+        injection_status: str | None = None,
     ) -> dict[str, Any]:
         """POST /agent/v1/bench/collect — run afterburner record+push and return run_id."""
+        body: dict[str, Any] = {"mission": mission, "service_name": service_name}
+        if intended_duration_s is not None:
+            body["intended_duration_s"] = intended_duration_s
+        if injection_status:
+            body["injection_status"] = injection_status
         return await self._post(
             "/bench/collect",
-            body={"mission": mission, "service_name": service_name},
+            body=body,
             timeout=timeout,
         )

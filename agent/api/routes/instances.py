@@ -85,14 +85,18 @@ async def get_instance_status(instanceId: str, request: Request) -> InstanceRunt
         try:
             started_at = datetime.fromisoformat(s)
             uptime_seconds = (now - started_at).total_seconds()
-        except (ValueError, TypeError):
+        except ValueError:
+            pass
+        except TypeError:
             pass
 
     mission_started_at: datetime | None = None
     if m := info.get("mission_started_at"):
         try:
             mission_started_at = datetime.fromisoformat(m)
-        except (ValueError, TypeError):
+        except ValueError:
+            pass
+        except TypeError:
             pass
 
     return InstanceRuntime(

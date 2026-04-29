@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from ...config import InstanceConfig
+from ...security import safe_join, sanitize_miz_filename
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -48,6 +49,14 @@ def _find_instance(config, service_name: str) -> InstanceConfig | None:
         if inst.service_name.lower() == service_name.lower():
             return inst
     return None
+
+
+def _resolve_active_mission_path(active_dir: str, mission: str) -> Path:
+    try:
+        safe_mission = sanitize_miz_filename(mission)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return safe_join(Path(active_dir), safe_mission)
 
 
 async def _run(cmd: list[str], timeout: float = 90.0) -> str:
@@ -150,13 +159,13 @@ async def inject_bench(payload: InjectRequest, request: Request) -> dict[str, st
             status_code=503, detail="active_missions_dir not configured"
         )
 
-    miz_path = Path(active_dir) / payload.mission
+    miz_path = _resolve_active_mission_path(active_dir, payload.mission)
     if not miz_path.exists():
         raise HTTPException(
             status_code=404, detail=f"Mission not found: {payload.mission}"
         )
 
-    tmp_path = miz_path.parent / (miz_path.stem + ".injecting.miz")
+    tmp_path = miz_path.with_name(f"{miz_path.stem}.injecting.miz")
     tmp_path.unlink(missing_ok=True)
 
     afterburner = config.afterburner_bin
@@ -204,7 +213,7 @@ async def collect_bench(payload: CollectRequest, request: Request) -> dict[str, 
             status_code=503, detail="active_missions_dir not configured"
         )
 
-    miz_path = str(Path(active_dir) / payload.mission)
+    miz_path = str(_resolve_active_mission_path(active_dir, payload.mission))
     afterburner = config.afterburner_bin
 
     # Build record command

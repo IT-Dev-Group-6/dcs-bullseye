@@ -76,3 +76,20 @@ pip install -r orchestrator/requirements-test.txt
 ```
 
 Exits with code 1 if any suite fails.
+
+---
+
+## `backfill_bench_summaries.py` — Populate historical bench summary rows
+
+Backfills `bench_run_summaries` from existing `bench_runs`, `bench_timeseries`, `bench_cpu`, `bench_findings`, and `bench_log_issues` rows.
+
+```bash
+# Fill only missing summaries in the default production DB
+python scripts/backfill_bench_summaries.py
+
+# Recompute every summary row
+python scripts/backfill_bench_summaries.py --all
+
+# Dry run against a staging copy
+python scripts/backfill_bench_summaries.py --db-path /path/to/orchestrator.db --dry-run
+```

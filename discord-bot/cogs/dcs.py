@@ -62,7 +62,9 @@ def _load_registrations() -> dict[str, str]:
     try:
         with open(_REG_FILE, encoding="utf-8") as f:
             return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+    except FileNotFoundError:
+        return {}
+    except json.JSONDecodeError:
         return {}
 
 

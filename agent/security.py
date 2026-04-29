@@ -18,6 +18,8 @@ def sanitize_miz_filename(name: str) -> str:
     """
     if not name or len(name) > 255:
         raise ValueError("Invalid filename")
+    if "/" in name or "\\" in name:
+        raise ValueError("Path separators are not allowed in filenames")
     # os.path.basename is a CodeQL-recognised path sanitizer; if it changes the
     # value then the input contained directory components.
     if os.path.basename(name) != name:

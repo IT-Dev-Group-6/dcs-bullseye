@@ -299,7 +299,9 @@ def _task_runtime(saved_games_key: str) -> dict:
     )
     try:
         return json.loads(result.stdout.strip())
-    except (json.JSONDecodeError, ValueError):
+    except json.JSONDecodeError:
+        return {"Status": "SERVICE_STOPPED", "Pid": None, "CreationDate": None}
+    except ValueError:
         return {"Status": "SERVICE_STOPPED", "Pid": None, "CreationDate": None}
 
 
@@ -331,7 +333,9 @@ def _read_hook_status(log_path: str) -> dict:
         return {}
     try:
         data = json.loads(status_file.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except OSError:
+        return {}
+    except json.JSONDecodeError:
         return {}
     updated_at_str = data.get("updated_at")
     if updated_at_str:
@@ -344,7 +348,9 @@ def _read_hook_status(log_path: str) -> dict:
                 data["players"] = []
                 data["_stale"] = True
                 return data
-        except (ValueError, TypeError):
+        except ValueError:
+            pass
+        except TypeError:
             pass
     return data
 
@@ -981,7 +987,13 @@ class DcsController:
         try:
             # utf-8-sig strips BOM if present (e.g. written by PowerShell Set-Content)
             return json.loads(self._UPDATE_STATUS_FILE.read_text(encoding="utf-8-sig"))
-        except (OSError, json.JSONDecodeError):
+        except OSError:
+            return {
+                "phase": "unknown",
+                "running": False,
+                "message": "Could not read status",
+            }
+        except json.JSONDecodeError:
             return {
                 "phase": "unknown",
                 "running": False,

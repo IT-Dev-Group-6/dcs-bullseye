@@ -64,7 +64,7 @@ async def _fetch_runtime(host_row: dict, service_name: str) -> InstanceRuntime |
             lastExitCode=data.get("lastExitCode"),
             lastError=data.get("lastError"),
         )
-    except (AgentError, Exception):
+    except Exception:
         return InstanceRuntime(status="unknown", observedAt=datetime.now(timezone.utc))
 
 
@@ -220,7 +220,7 @@ async def list_instance_missions(instanceId: str, request: Request) -> dict:
     try:
         async with AgentClient(agent_base, host_row["agent_api_key"]) as client:
             items = await client.list_missions(inst_row["service_name"])
-    except (AgentError, Exception):
+    except Exception:
         items = []
     return {"items": items}
 

@@ -122,6 +122,8 @@ async def ingest_bench_run(
             run_id, [r.model_dump() for r in payload.log_issues]
         )
 
+    await db.refresh_bench_run_summary(run_id)
+
     logger.info(
         "[bench] run %s recorded for host %s — mission=%s ts=%d cpu=%d findings=%d issues=%d quality=%s",
         run_id,

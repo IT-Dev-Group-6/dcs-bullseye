@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import secrets
 from datetime import datetime, timezone
+from math import ceil, floor
 from typing import Any
 
 import aiosqlite
@@ -146,6 +147,106 @@ CREATE TABLE IF NOT EXISTS bench_log_issues (
 CREATE INDEX IF NOT EXISTS idx_bench_log_issues_run ON bench_log_issues(run_id);
 """
 
+_CREATE_BENCH_RUN_SUMMARIES = """
+CREATE TABLE IF NOT EXISTS bench_run_summaries (
+    run_id             TEXT PRIMARY KEY REFERENCES bench_runs(id),
+    avg_cpu_pct        REAL,
+    p95_cpu_pct        REAL,
+    max_cpu_pct        REAL,
+    avg_mem_mb         REAL,
+    max_mem_mb         REAL,
+    avg_drift_s        REAL,
+    p95_drift_s        REAL,
+    max_drift_s        REAL,
+    avg_units          REAL,
+    max_units          INTEGER,
+    avg_groups         REAL,
+    max_groups         INTEGER,
+    sample_count       INTEGER,
+    bench_sample_count INTEGER,
+    cpu_sample_count   INTEGER,
+    findings_count     INTEGER,
+    log_issue_count    INTEGER,
+    validity_status    TEXT NOT NULL DEFAULT 'unknown',
+    performance_score  REAL,
+    computed_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bench_run_summaries_validity ON bench_run_summaries(validity_status);
+"""
+
+_CREATE_CLIENT_BENCH_RUNS = """
+CREATE TABLE IF NOT EXISTS client_bench_runs (
+    id                  TEXT PRIMARY KEY,
+    server_run_id       TEXT REFERENCES bench_runs(id),
+    mission             TEXT NOT NULL,
+    mission_hash        TEXT,
+    started_at          TEXT NOT NULL,
+    ended_at            TEXT,
+    duration_s          INTEGER,
+    pass_count          INTEGER NOT NULL,
+    confidence          TEXT,
+    score               REAL,
+    score_band          TEXT,
+    dcs_version         TEXT,
+    afterburner_version TEXT,
+    presentmon_version  TEXT,
+    client_host_id      TEXT,
+    client_machine_name TEXT,
+    gpu_name            TEXT,
+    gpu_driver_version  TEXT,
+    cpu_model           TEXT,
+    ram_total_mb        INTEGER,
+    resolution_width    INTEGER,
+    resolution_height   INTEGER,
+    graphics_preset     TEXT,
+    vsync_enabled       INTEGER,
+    vr_enabled          INTEGER,
+    notes               TEXT,
+    raw_json_path       TEXT,
+    created_at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_client_bench_server_run ON client_bench_runs(server_run_id);
+"""
+
+_CREATE_CLIENT_BENCH_PASSES = """
+CREATE TABLE IF NOT EXISTS client_bench_passes (
+    id                     TEXT PRIMARY KEY,
+    client_run_id          TEXT NOT NULL REFERENCES client_bench_runs(id),
+    pass_index             INTEGER NOT NULL,
+    started_at             TEXT,
+    ended_at               TEXT,
+    load_and_run_time      REAL,
+    load_time_s            REAL,
+    avg_fps                REAL,
+    low_1pct_fps           REAL,
+    low_01pct_fps          REAL,
+    avg_frametime_ms       REAL,
+    frametime_stdev_ms     REAL,
+    sample_count           INTEGER,
+    presentmon_csv_path    TEXT,
+    client_log_path        TEXT,
+    client_log_issue_count INTEGER,
+    client_hard_stop_error TEXT,
+    client_crash_detected  INTEGER NOT NULL DEFAULT 0,
+    status                 TEXT NOT NULL DEFAULT 'unknown',
+    error                  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_client_pass_run ON client_bench_passes(client_run_id);
+"""
+
+_CREATE_CLIENT_LOG_ISSUES = """
+CREATE TABLE IF NOT EXISTS client_log_issues (
+    client_pass_id TEXT NOT NULL REFERENCES client_bench_passes(id),
+    issue_type     TEXT NOT NULL,
+    signature      TEXT NOT NULL,
+    count          INTEGER NOT NULL,
+    first_line     TEXT,
+    last_line      TEXT,
+    detail         TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_client_log_issue_pass ON client_log_issues(client_pass_id);
+"""
+
 _CREATE_BENCH_QUEUE = """
 CREATE TABLE IF NOT EXISTS bench_queue (
     id           TEXT PRIMARY KEY,
@@ -187,6 +288,45 @@ def _queue_row_to_dict(row: aiosqlite.Row) -> dict[str, Any]:
     return d
 
 
+def _percentile(values: list[float], percentile: float) -> float | None:
+    if not values:
+        return None
+    data = sorted(values)
+    if len(data) == 1:
+        return data[0]
+    rank = (percentile / 100.0) * (len(data) - 1)
+    low = floor(rank)
+    high = ceil(rank)
+    if low == high:
+        return data[low]
+    weight = rank - low
+    return data[low] * (1 - weight) + data[high] * weight
+
+
+def _validity_status(run: dict[str, Any], bench_count: int, cpu_count: int) -> str:
+    if run.get("hard_stop_error"):
+        return "mission_script_hard_stop"
+    quality = run.get("run_quality") or "unknown"
+    if quality in {
+        "valid",
+        "partial",
+        "mission_script_hard_stop",
+        "no_bench_data",
+        "agent_error",
+        "manual_excluded",
+    }:
+        return quality
+    if quality == "ok" and bench_count > 0 and cpu_count > 0:
+        return "valid"
+    if quality == "ok":
+        return "partial"
+    if quality == "partial_bench_rows":
+        return "partial"
+    if quality == "no_bench_rows":
+        return "no_bench_data"
+    return "unknown"
+
+
 class Database:
     def __init__(self, db_path: str) -> None:
         self._path = db_path
@@ -207,6 +347,10 @@ class Database:
         await self._conn.executescript(_CREATE_BENCH_CPU)
         await self._conn.executescript(_CREATE_BENCH_FINDINGS)
         await self._conn.executescript(_CREATE_BENCH_LOG_ISSUES)
+        await self._conn.executescript(_CREATE_BENCH_RUN_SUMMARIES)
+        await self._conn.executescript(_CREATE_CLIENT_BENCH_RUNS)
+        await self._conn.executescript(_CREATE_CLIENT_BENCH_PASSES)
+        await self._conn.executescript(_CREATE_CLIENT_LOG_ISSUES)
         await self._conn.execute(_CREATE_BENCH_QUEUE)
         # Safe migration: add frp_port column if missing
         try:
@@ -688,19 +832,271 @@ class Database:
         )
         await self._conn.commit()
 
+    async def refresh_bench_run_summary(
+        self,
+        run_id: str,
+        *,
+        performance_score: float | None = None,
+        validity_status: str | None = None,
+    ) -> dict[str, Any] | None:
+        assert self._conn
+        run = await self._get_row("SELECT * FROM bench_runs WHERE id = ?", (run_id,))
+        if not run:
+            return None
+        run_dict = dict(run)
+
+        async with self._conn.execute(
+            "SELECT drift_s, groups, units FROM bench_timeseries WHERE run_id = ? ORDER BY elapsed_s",
+            (run_id,),
+        ) as cur:
+            bench_rows = await cur.fetchall()
+        async with self._conn.execute(
+            "SELECT cpu_pct, mem_mb FROM bench_cpu WHERE run_id = ? ORDER BY elapsed_s",
+            (run_id,),
+        ) as cur:
+            cpu_rows = await cur.fetchall()
+        async with self._conn.execute(
+            "SELECT 1 FROM bench_findings WHERE run_id = ?",
+            (run_id,),
+        ) as cur:
+            findings = await cur.fetchall()
+        async with self._conn.execute(
+            "SELECT 1 FROM bench_log_issues WHERE run_id = ?",
+            (run_id,),
+        ) as cur:
+            log_issues = await cur.fetchall()
+
+        bench_drift = [float(r["drift_s"]) for r in bench_rows]
+        bench_units = [int(r["units"]) for r in bench_rows]
+        bench_groups = [int(r["groups"]) for r in bench_rows]
+        cpu_pct = [float(r["cpu_pct"]) for r in cpu_rows]
+        mem_mb = [float(r["mem_mb"]) for r in cpu_rows]
+
+        summary = {
+            "run_id": run_id,
+            "avg_cpu_pct": round(sum(cpu_pct) / len(cpu_pct), 3) if cpu_pct else None,
+            "p95_cpu_pct": _percentile(cpu_pct, 95.0),
+            "max_cpu_pct": max(cpu_pct) if cpu_pct else None,
+            "avg_mem_mb": round(sum(mem_mb) / len(mem_mb), 3) if mem_mb else None,
+            "max_mem_mb": max(mem_mb) if mem_mb else None,
+            "avg_drift_s": round(sum(bench_drift) / len(bench_drift), 6)
+            if bench_drift
+            else None,
+            "p95_drift_s": _percentile(bench_drift, 95.0),
+            "max_drift_s": max(bench_drift) if bench_drift else None,
+            "avg_units": round(sum(bench_units) / len(bench_units), 3)
+            if bench_units
+            else None,
+            "max_units": max(bench_units) if bench_units else None,
+            "avg_groups": round(sum(bench_groups) / len(bench_groups), 3)
+            if bench_groups
+            else None,
+            "max_groups": max(bench_groups) if bench_groups else None,
+            "sample_count": len(bench_rows) + len(cpu_rows),
+            "bench_sample_count": len(bench_rows),
+            "cpu_sample_count": len(cpu_rows),
+            "findings_count": len(findings),
+            "log_issue_count": len(log_issues),
+            "validity_status": validity_status
+            or _validity_status(run_dict, len(bench_rows), len(cpu_rows)),
+            "performance_score": performance_score,
+            "computed_at": _now_iso(),
+        }
+
+        await self._conn.execute(
+            """
+            INSERT INTO bench_run_summaries (
+                run_id, avg_cpu_pct, p95_cpu_pct, max_cpu_pct,
+                avg_mem_mb, max_mem_mb,
+                avg_drift_s, p95_drift_s, max_drift_s,
+                avg_units, max_units,
+                avg_groups, max_groups,
+                sample_count, bench_sample_count, cpu_sample_count,
+                findings_count, log_issue_count,
+                validity_status, performance_score, computed_at
+            )
+            VALUES (
+                :run_id, :avg_cpu_pct, :p95_cpu_pct, :max_cpu_pct,
+                :avg_mem_mb, :max_mem_mb,
+                :avg_drift_s, :p95_drift_s, :max_drift_s,
+                :avg_units, :max_units,
+                :avg_groups, :max_groups,
+                :sample_count, :bench_sample_count, :cpu_sample_count,
+                :findings_count, :log_issue_count,
+                :validity_status, :performance_score, :computed_at
+            )
+            ON CONFLICT(run_id) DO UPDATE SET
+                avg_cpu_pct=excluded.avg_cpu_pct,
+                p95_cpu_pct=excluded.p95_cpu_pct,
+                max_cpu_pct=excluded.max_cpu_pct,
+                avg_mem_mb=excluded.avg_mem_mb,
+                max_mem_mb=excluded.max_mem_mb,
+                avg_drift_s=excluded.avg_drift_s,
+                p95_drift_s=excluded.p95_drift_s,
+                max_drift_s=excluded.max_drift_s,
+                avg_units=excluded.avg_units,
+                max_units=excluded.max_units,
+                avg_groups=excluded.avg_groups,
+                max_groups=excluded.max_groups,
+                sample_count=excluded.sample_count,
+                bench_sample_count=excluded.bench_sample_count,
+                cpu_sample_count=excluded.cpu_sample_count,
+                findings_count=excluded.findings_count,
+                log_issue_count=excluded.log_issue_count,
+                validity_status=excluded.validity_status,
+                performance_score=excluded.performance_score,
+                computed_at=excluded.computed_at
+            """,
+            summary,
+        )
+        await self._conn.commit()
+        return summary
+
+    async def get_bench_run_summary(self, run_id: str) -> dict[str, Any] | None:
+        row = await self._get_row(
+            "SELECT * FROM bench_run_summaries WHERE run_id = ?", (run_id,)
+        )
+        return dict(row) if row else None
+
+    async def insert_client_bench_run(self, row: dict[str, Any]) -> None:
+        assert self._conn
+        await self._conn.execute(
+            """
+            INSERT INTO client_bench_runs (
+                id, server_run_id, mission, mission_hash, started_at, ended_at,
+                duration_s, pass_count, confidence, score, score_band,
+                dcs_version, afterburner_version, presentmon_version,
+                client_host_id, client_machine_name, gpu_name, gpu_driver_version,
+                cpu_model, ram_total_mb, resolution_width, resolution_height,
+                graphics_preset, vsync_enabled, vr_enabled, notes,
+                raw_json_path, created_at
+            )
+            VALUES (
+                :id, :server_run_id, :mission, :mission_hash, :started_at, :ended_at,
+                :duration_s, :pass_count, :confidence, :score, :score_band,
+                :dcs_version, :afterburner_version, :presentmon_version,
+                :client_host_id, :client_machine_name, :gpu_name, :gpu_driver_version,
+                :cpu_model, :ram_total_mb, :resolution_width, :resolution_height,
+                :graphics_preset, :vsync_enabled, :vr_enabled, :notes,
+                :raw_json_path, :created_at
+            )
+            """,
+            row,
+        )
+        await self._conn.commit()
+
+    async def insert_client_bench_passes(self, rows: list[dict[str, Any]]) -> None:
+        assert self._conn
+        await self._conn.executemany(
+            """
+            INSERT INTO client_bench_passes (
+                id, client_run_id, pass_index, started_at, ended_at,
+                load_and_run_time, load_time_s, avg_fps, low_1pct_fps, low_01pct_fps,
+                avg_frametime_ms, frametime_stdev_ms, sample_count, presentmon_csv_path,
+                client_log_path, client_log_issue_count, client_hard_stop_error,
+                client_crash_detected, status, error
+            )
+            VALUES (
+                :id, :client_run_id, :pass_index, :started_at, :ended_at,
+                :load_and_run_time, :load_time_s, :avg_fps, :low_1pct_fps, :low_01pct_fps,
+                :avg_frametime_ms, :frametime_stdev_ms, :sample_count, :presentmon_csv_path,
+                :client_log_path, :client_log_issue_count, :client_hard_stop_error,
+                :client_crash_detected, :status, :error
+            )
+            """,
+            rows,
+        )
+        await self._conn.commit()
+
+    async def insert_client_log_issues(self, rows: list[dict[str, Any]]) -> None:
+        assert self._conn
+        await self._conn.executemany(
+            """
+            INSERT INTO client_log_issues (
+                client_pass_id, issue_type, signature, count, first_line, last_line, detail
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    row["client_pass_id"],
+                    row["issue_type"],
+                    row["signature"],
+                    row["count"],
+                    row.get("first_line"),
+                    row.get("last_line"),
+                    row.get("detail"),
+                )
+                for row in rows
+            ],
+        )
+        await self._conn.commit()
+
     async def list_bench_runs(
         self, host_id: str | None = None, limit: int = 100
     ) -> list[dict[str, Any]]:
         assert self._conn
+        summary_fields = """
+            s.avg_cpu_pct AS summary_avg_cpu_pct,
+            s.p95_cpu_pct AS summary_p95_cpu_pct,
+            s.max_cpu_pct AS summary_max_cpu_pct,
+            s.avg_mem_mb AS summary_avg_mem_mb,
+            s.max_mem_mb AS summary_max_mem_mb,
+            s.avg_drift_s AS summary_avg_drift_s,
+            s.p95_drift_s AS summary_p95_drift_s,
+            s.max_drift_s AS summary_max_drift_s,
+            s.avg_units AS summary_avg_units,
+            s.max_units AS summary_max_units,
+            s.avg_groups AS summary_avg_groups,
+            s.max_groups AS summary_max_groups,
+            s.sample_count AS summary_sample_count,
+            s.bench_sample_count AS summary_bench_sample_count,
+            s.cpu_sample_count AS summary_cpu_sample_count,
+            s.findings_count AS summary_findings_count,
+            s.log_issue_count AS summary_log_issue_count,
+            s.validity_status AS summary_validity_status,
+            s.performance_score AS summary_performance_score,
+            s.computed_at AS summary_computed_at
+        """
         if host_id:
-            sql = "SELECT * FROM bench_runs WHERE host_id = ? ORDER BY created_at DESC LIMIT ?"
+            sql = f"""
+                SELECT
+                    r.*,
+                    {summary_fields}
+                FROM bench_runs r
+                LEFT JOIN bench_run_summaries s ON s.run_id = r.id
+                WHERE r.host_id = ?
+                ORDER BY r.created_at DESC
+                LIMIT ?
+            """
             params: tuple = (host_id, limit)
         else:
-            sql = "SELECT * FROM bench_runs ORDER BY created_at DESC LIMIT ?"
+            sql = f"""
+                SELECT
+                    r.*,
+                    {summary_fields}
+                FROM bench_runs r
+                LEFT JOIN bench_run_summaries s ON s.run_id = r.id
+                ORDER BY r.created_at DESC
+                LIMIT ?
+            """
             params = (limit,)
         async with self._conn.execute(sql, params) as cur:
             rows = await cur.fetchall()
-        return [dict(r) for r in rows]
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            data = dict(row)
+            summary = {
+                key.removeprefix("summary_"): data.pop(key)
+                for key in list(data.keys())
+                if key.startswith("summary_")
+            }
+            if any(value is not None for value in summary.values()):
+                data["summary"] = summary
+            else:
+                data["summary"] = None
+            result.append(data)
+        return result
 
     async def get_bench_run(self, run_id: str) -> dict[str, Any] | None:
         assert self._conn
@@ -708,6 +1104,7 @@ class Database:
         if not row:
             return None
         result = dict(row)
+        result["summary"] = await self.get_bench_run_summary(run_id)
         async with self._conn.execute(
             "SELECT elapsed_s, drift_s, groups, units FROM bench_timeseries WHERE run_id = ? ORDER BY elapsed_s",
             (run_id,),

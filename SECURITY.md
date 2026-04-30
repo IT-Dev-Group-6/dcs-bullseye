@@ -8,7 +8,7 @@ Only the latest commit on the `main` branch is actively maintained. No backporte
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Report security issues privately using [GitHub's private vulnerability reporting](https://github.com/TylerDOC1776/dcs-bullseye/security/advisories/new).
+Report security issues privately using [GitHub's private vulnerability reporting](https://github.com/IT-Dev-Group-6/dcs-bullseye/security/advisories/new).
 
 Please include:
 - A description of the vulnerability and its potential impact

@@ -68,6 +68,10 @@ Reboots a specific Windows host machine. Requires **DCS Admin** role and confirm
 ### `/dcs update <host>`
 Stops all DCS servers on a specific host, runs the DCS World updater, then restarts them automatically. Requires **DCS Admin** role and confirmation before executing. The full process takes 10–60 minutes depending on patch size. Progress is reported in the status channel. If DCS is already up to date the updater exits immediately and servers restart normally.
 
+Before running a manual host update, temporarily exclude the target instance from the bot's keepalive auto-start list so normal recovery logic does not race the updater. Use the exact instance name from the orchestrator, then restart the Discord bot service so it reloads `AUTO_RESTART_EXCLUDE`.
+
+Test note: on `Goon Test Kitchen`, the update flow stopped the server but did not reach the updater run step.
+
 ---
 
 ## Scheduling

@@ -60,8 +60,11 @@ Instance arguments use autocomplete — available instances are fetched live fro
 
 - **Live status embed** — refreshes every 5 minutes in the configured status channel
 - **Daily restart** — servers running longer than 48 hours auto-restart at 5:00 AM Eastern
+- **Keepalive auto-start** — stopped instances are started automatically unless their exact instance name is listed in `AUTO_RESTART_EXCLUDE`
 - **Crash loop detection** — alerts when an instance crashes 3+ times within 10 minutes
 - **Analytics collection** — agent pushes player join/leave and mission events automatically
+
+Test note: on `Goon Test Kitchen`, the host update flow stopped the server but did not actually run `DCS_updater.exe`.
 
 ---
 
@@ -90,6 +93,7 @@ cp .env.example .env
 | `STATUS_CHANNEL_ID` | *(optional)* Channel for the live status embed |
 | `OPERATOR_ROLE` | Role required for operator commands (default: `DCS Operator`) |
 | `ADMIN_ROLE` | Role required for admin commands (default: `DCS Admin`) |
+| `AUTO_RESTART_EXCLUDE` | *(optional)* Comma-separated instance names exempt from keepalive auto-start |
 | `DCS_REGISTRATIONS_FILE` | Path to `registrations.json` for `/dcs register` (default: next to bot) |
 
 ### Discord bot permissions

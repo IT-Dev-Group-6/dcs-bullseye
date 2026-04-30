@@ -12,7 +12,7 @@ set -euo pipefail
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-REPO_URL="https://github.com/TylerDOC1776/dcs-bullseye.git"
+REPO_URL="${REPO_URL:-https://github.com/IT-Dev-Group-6/dcs-bullseye.git}"
 FRP_VERSION="0.61.0"
 FRP_URL="https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_linux_amd64.tar.gz"
 
@@ -94,8 +94,29 @@ copy_install_script() {
 # ── Argument parsing ──────────────────────────────────────────────────────────
 
 UPDATE=false
-for arg in "$@"; do
-    [[ "$arg" == "--update" ]] && UPDATE=true
+# Parse CLI args (supports: --update, --repo-url <url> or --repo-url=<url>)
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --update)
+      UPDATE=true
+      shift
+      ;;
+    --repo-url)
+      if [[ -n "${2-}" ]]; then
+        REPO_URL="$2"
+        shift 2
+      else
+        die "--repo-url requires a value"
+      fi
+      ;;
+    --repo-url=*)
+      REPO_URL="${1#--repo-url=}"
+      shift
+      ;;
+    *)
+      shift
+      ;;
+  esac
 done
 
 # ── Root check ────────────────────────────────────────────────────────────────

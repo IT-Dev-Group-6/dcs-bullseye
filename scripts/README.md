@@ -14,7 +14,7 @@ bash install-vps.sh
 bash install-vps.sh --update
 ```
 
-See the [VPS Setup wiki page](https://github.com/TylerDOC1776/dcs-bullseye/wiki/VPS-Setup) for full details.
+See the [VPS Setup wiki page](https://github.com/IT-Dev-Group-6/dcs-bullseye/wiki/VPS-Setup) for full details.
 
 ---
 

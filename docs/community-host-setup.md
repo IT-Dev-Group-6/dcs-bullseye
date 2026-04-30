@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-The platform VPS must already be running before community hosts can join. If you are the platform admin and haven't set up the VPS yet, run `scripts/install-vps.sh` first — see the [VPS Setup wiki page](https://github.com/TylerDOC1776/dcs-bullseye/wiki/VPS-Setup).
+The platform VPS must already be running before community hosts can join. If you are the platform admin and haven't set up the VPS yet, run `scripts/install-vps.sh` first — see the [VPS Setup wiki page](https://github.com/IT-Dev-Group-6/dcs-bullseye/wiki/VPS-Setup).
 
 ---
 

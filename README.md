@@ -1,4 +1,4 @@
-<img src="https://raw.githubusercontent.com/wiki/TylerDOC1776/dcs-bullseye/dcs-bullseyelogo.png" alt="DCS Bullseye" width="150">
+<img src="https://raw.githubusercontent.com/wiki/IT-Dev-Group-6/dcs-bullseye/dcs-bullseyelogo.png" alt="DCS Bullseye" width="150">
 
 # dcs-bullseye
 

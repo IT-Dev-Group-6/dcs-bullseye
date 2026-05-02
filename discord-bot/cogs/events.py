@@ -253,10 +253,8 @@ class EventsCog(commands.Cog):
         await channel.send(embed=embed)
 
     async def _on_player_joined(self, channel: discord.TextChannel, data: dict) -> None:
-        payload = data.get("data", {})
-        player_name = payload.get("playerName", "Unknown")
+        player_name = data.get("playerName", "Unknown")
         instance_id = data.get("instanceId", "Unknown")
-        # In this event, we don't have the friendly name, so use ID
         instance_name = instance_id
 
         now = time.monotonic()
@@ -276,8 +274,7 @@ class EventsCog(commands.Cog):
         # if count > threshold, suppress (already notified)
 
     async def _on_player_left(self, channel: discord.TextChannel, data: dict) -> None:
-        payload = data.get("data", {})
-        player_name = payload.get("playerName", "Unknown")
+        player_name = data.get("playerName", "Unknown")
         instance_id = data.get("instanceId", "Unknown")
         instance_name = instance_id
 

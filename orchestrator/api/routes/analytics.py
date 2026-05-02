@@ -60,7 +60,9 @@ async def ingest_events(
 
         # Publish player join/leave to the event bus for real-time notifications
         if ev.event_type in ("player_join", "player_leave"):
-            event_type = "player.joined" if ev.event_type == "player_join" else "player.left"
+            event_type = (
+                "player.joined" if ev.event_type == "player_join" else "player.left"
+            )
             request.app.state.event_bus.publish(
                 Event(
                     type=event_type,

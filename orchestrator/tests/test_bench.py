@@ -1,6 +1,36 @@
 from fastapi.testclient import TestClient
 
+from orchestrator.database import _compute_performance_score
+
 from .conftest import HEADERS
+
+
+def test_compute_performance_score_applies_deductions_and_caps() -> None:
+    summary = {
+        "validity_status": "valid",
+        "p95_drift_s": 3.0,
+        "p95_cpu_pct": 76.0,
+        "log_issue_count": 20,
+    }
+
+    assert (
+        _compute_performance_score(summary, critical_findings=2, warning_findings=10)
+        == 5.0
+    )
+
+
+def test_compute_performance_score_skips_invalid_runs() -> None:
+    summary = {
+        "validity_status": "partial",
+        "p95_drift_s": 0.1,
+        "p95_cpu_pct": 10.0,
+        "log_issue_count": 0,
+    }
+
+    assert (
+        _compute_performance_score(summary, critical_findings=0, warning_findings=0)
+        is None
+    )
 
 
 def test_ingest_bench_run_populates_summary(client: TestClient, host_id: str) -> None:
@@ -52,10 +82,12 @@ def test_ingest_bench_run_populates_summary(client: TestClient, host_id: str) ->
     assert runs[0]["summary"]["cpu_sample_count"] == 2
     assert runs[0]["summary"]["findings_count"] == 1
     assert runs[0]["summary"]["log_issue_count"] == 1
+    assert runs[0]["summary"]["performance_score"] == 88.0
 
     detail_resp = client.get(f"/api/v1/bench/runs/{run_id}", headers=HEADERS)
     assert detail_resp.status_code == 200
     run = detail_resp.json()
     assert run["summary"]["validity_status"] == "valid"
+    assert run["summary"]["performance_score"] == 88.0
     assert len(run["bench_timeseries"]) == 2
     assert len(run["cpu_timeseries"]) == 2

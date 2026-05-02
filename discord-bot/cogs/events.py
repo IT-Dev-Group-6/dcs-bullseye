@@ -29,9 +29,12 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-_SUBSCRIBE_TYPES = "instance.status_changed,job.failed"
+_SUBSCRIBE_TYPES = "instance.status_changed,job.failed,player.joined,player.left"
 _MIN_BACKOFF = 1.0
 _MAX_BACKOFF = 60.0
+
+_JOIN_SPAM_WINDOW = 60.0  # seconds
+_JOIN_SPAM_THRESHOLD = 5  # joins per window before consolidating
 
 _CRASH_LOOP_WINDOW = 600.0  # seconds — sliding window for crash detection
 _CRASH_LOOP_THRESHOLD = 3  # crashes within the window triggers an alert
@@ -57,6 +60,8 @@ class EventsCog(commands.Cog):
         # crash loop detection: instance_id → list of crash timestamps (monotonic)
         self._crash_times: dict[str, list[float]] = {}
         self._crash_loop_alerted: set[str] = set()
+        # player join spam tracking: instance_id → list of join timestamps (monotonic)
+        self._recent_joins: dict[str, list[float]] = {}
 
     async def cog_load(self) -> None:
         self._task = asyncio.create_task(self._sse_loop())
@@ -147,6 +152,10 @@ class EventsCog(commands.Cog):
                 await self._on_status_changed(channel, data)
             elif event_type == "job.failed":
                 await self._on_job_failed(channel, data)
+            elif event_type == "player.joined":
+                await self._on_player_joined(channel, data)
+            elif event_type == "player.left":
+                await self._on_player_left(channel, data)
         except Exception as exc:
             log.warning("Failed to post event notification: %s", exc)
 
@@ -242,3 +251,34 @@ class EventsCog(commands.Cog):
         if error_msg:
             embed.add_field(name="Error", value=error_msg, inline=False)
         await channel.send(embed=embed)
+
+    async def _on_player_joined(self, channel: discord.TextChannel, data: dict) -> None:
+        payload = data.get("data", {})
+        player_name = payload.get("playerName", "Unknown")
+        instance_id = data.get("instanceId", "Unknown")
+        # In this event, we don't have the friendly name, so use ID
+        instance_name = instance_id
+
+        now = time.monotonic()
+        times = self._recent_joins.get(instance_id, [])
+        # prune timestamps outside the sliding window
+        times = [t for t in times if now - t <= _JOIN_SPAM_WINDOW]
+        times.append(now)
+        self._recent_joins[instance_id] = times
+
+        count = len(times)
+        if count < _JOIN_SPAM_THRESHOLD:
+            await channel.send(f"🟢 **{player_name}** joined **{instance_name}**")
+        elif count == _JOIN_SPAM_THRESHOLD:
+            await channel.send(
+                f"🟢 **{count}** players joined **{instance_name}** in the last {int(_JOIN_SPAM_WINDOW)}s"
+            )
+        # if count > threshold, suppress (already notified)
+
+    async def _on_player_left(self, channel: discord.TextChannel, data: dict) -> None:
+        payload = data.get("data", {})
+        player_name = payload.get("playerName", "Unknown")
+        instance_id = data.get("instanceId", "Unknown")
+        instance_name = instance_id
+
+        await channel.send(f"🔴 **{player_name}** left **{instance_name}**")

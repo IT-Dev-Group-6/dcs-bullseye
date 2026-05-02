@@ -14,6 +14,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
+from orchestrator.events import Event
+
 from ..auth import require_api_key
 
 logger = logging.getLogger(__name__)
@@ -55,6 +57,22 @@ async def ingest_events(
             map=ev.map,
             timestamp=ev.timestamp,
         )
+
+        # Publish player join/leave to the event bus for real-time notifications
+        if ev.event_type in ("player_join", "player_leave"):
+            event_type = "player.joined" if ev.event_type == "player_join" else "player.left"
+            request.app.state.event_bus.publish(
+                Event(
+                    type=event_type,
+                    data={
+                        "playerName": ev.player_name,
+                        "instanceId": ev.instance_id,
+                        "missionName": ev.mission_name,
+                    },
+                    instance_id=ev.instance_id,
+                    host_id=x_host_id,
+                )
+            )
 
     if batch.events:
         logger.debug("[analytics] %s wrote %d event(s)", x_host_id, len(batch.events))

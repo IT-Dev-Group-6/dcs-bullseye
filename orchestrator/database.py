@@ -327,6 +327,42 @@ def _validity_status(run: dict[str, Any], bench_count: int, cpu_count: int) -> s
     return "unknown"
 
 
+def _compute_performance_score(
+    summary: dict[str, Any], critical_findings: int, warning_findings: int
+) -> float | None:
+    if summary.get("validity_status") != "valid":
+        return None
+
+    score = 100.0
+
+    p95_drift_s = summary.get("p95_drift_s")
+    if p95_drift_s is not None:
+        if p95_drift_s <= 0.5:
+            pass
+        elif p95_drift_s <= 2.0:
+            score -= 10.0
+        elif p95_drift_s <= 5.0:
+            score -= 20.0
+        else:
+            score -= 35.0
+
+    p95_cpu_pct = summary.get("p95_cpu_pct")
+    if p95_cpu_pct is not None:
+        if p95_cpu_pct < 40.0:
+            pass
+        elif p95_cpu_pct <= 60.0:
+            score -= 10.0
+        elif p95_cpu_pct <= 75.0:
+            score -= 20.0
+        else:
+            score -= 30.0
+
+    score -= min((critical_findings * 15.0) + (warning_findings * 5.0), 30.0)
+    score -= min((summary.get("log_issue_count") or 0) * 2.0, 15.0)
+
+    return max(0.0, min(score, 100.0))
+
+
 class Database:
     def __init__(self, db_path: str) -> None:
         self._path = db_path
@@ -902,6 +938,26 @@ class Database:
             "performance_score": performance_score,
             "computed_at": _now_iso(),
         }
+
+        if performance_score is None:
+            async with self._conn.execute(
+                """
+                SELECT severity, COUNT(*) AS count
+                FROM bench_findings
+                WHERE run_id = ?
+                GROUP BY severity
+                """,
+                (run_id,),
+            ) as cur:
+                finding_counts = {
+                    str(r["severity"]).lower(): int(r["count"])
+                    for r in await cur.fetchall()
+                }
+            summary["performance_score"] = _compute_performance_score(
+                summary,
+                finding_counts.get("critical", 0),
+                finding_counts.get("warning", 0),
+            )
 
         await self._conn.execute(
             """

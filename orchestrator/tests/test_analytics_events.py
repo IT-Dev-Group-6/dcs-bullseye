@@ -1,5 +1,3 @@
-
-import pytest
 from fastapi.testclient import TestClient
 
 def test_ingest_player_events_publishes_to_bus(client: TestClient, host_id: str, instance_id: str):
